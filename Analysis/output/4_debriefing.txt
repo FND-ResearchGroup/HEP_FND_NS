@@ -1,0 +1,13 @@
+Comparison	p_value	p_adj_fdr
+hep_difficulty_heart (FND vs HC)	0.00225111098763842	0.00385904740738015
+hep_difficulty_sound (FND vs HC)	0.155119359331387	0.206825812441849
+hep_difficulty (FND: sound vs heart)	8.05902704507995e-07	1.61180540901599e-06
+hep_difficulty (HC: sound vs heart)	1.78411255975399e-09	1.47192495448902e-08
+hep_focus_heart (FND vs HC)	0.310427109661743	0.372512531594092
+hep_focus_sound (FND vs HC)	0.347207253763413	0.378771549560086
+hep_focus (FND: sound vs heart)	1.22678491988812e-07	2.94428380773149e-07
+hep_focus (HC: sound vs heart)	3.19329920847508e-09	1.47192495448902e-08
+hep_intensity_heart (FND vs HC)	0.147934413889525	0.206825812441849
+hep_intensity_sound (FND vs HC)	0.859555794116436	0.859555794116436
+hep_intensity (FND: sound vs heart)	3.98082739312962e-08	1.19424821793889e-07
+hep_intensity (HC: sound vs heart)	3.67981238622256e-09	1.47192495448902e-08

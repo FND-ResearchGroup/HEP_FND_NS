@@ -1,0 +1,5 @@
+Description
+List of the stimuli used during the HEP task:
+'Questions_during_HEP_task.pdf': PDF document with the questions ask during the HEP task in french, german and english. The purpose of these questions was simply to keep the participant awake during the passive HEP task. These data are not included in this repository because they are not relevant for studying heart-evoked potentials.
+'self-evaluation_questions_after_HEP_task.docx': PDF document with the questions ask after the HEP task in french, german and english. Responses were given on a continous scale between 0-100. Results are in the participants.tsv file.
+

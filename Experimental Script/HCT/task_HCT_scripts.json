@@ -1,0 +1,7 @@
+{
+	"Description":[
+		"Experimental scripts used during HBT task. The scripts are coded with Eprime 3.0 (Psychology Software tool) which is required to open these files. Files *.es3 is the E-studio file (edition), *.ebs3 is the executable code which required E-run to be executed, tone1.wav is the audio stimulus. Instructions screens are saved in jpg image format in the folder 'instructions' in french, german or english."
+	]
+	
+	
+}

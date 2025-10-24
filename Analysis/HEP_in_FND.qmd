@@ -1,0 +1,2309 @@
+---
+title: "Heartbeat evoked Potential in FND"
+author: "Natascha Stoffel"
+date: "`r date()`"
+format:
+  html:
+    embed-resources: true
+    toc: true #to show table of contents
+editor: visual
+---
+
+# Information on the Data
+
+BASEC registration number : 2023-0469
+
+Study Visit "Interoception" conducted between **18.10.2023 - 4.9.2024**, with completed **N=92 participants.**
+
+Analysis conducted with RStudio 2023.12.1+402.
+
+# 0) Preparation
+
+```{r}
+#| output: false
+#| warning: FALSE
+#| error: FALSE
+# remove everything that we stored in the environment
+rm(list=ls()) 
+
+# Load necessary libraries
+library(readr)      # For read_csv()
+library(dplyr)      # For data manipulation functions
+library(gtsummary)  # For tbl_summary()
+library(gt)         # For working with gt tables
+library(ggplot2)    # For plotting
+library(ggpubr)     # For ggboxplot() and adding jitter
+library(ggsignif)   # For statistical comparisons in plots
+library(gridExtra)  # For arranging multiple plots in a grid
+library(openxlsx)   # For saving Excel files
+library(tidyr)      # For reshaping data
+library(plyr)       # For revalue() function
+library(car)        # testing assumptions in models
+library(rstatix)    # running ancova models
+library(lmerTest)   # running linear mixed models
+library(writexl)    # save excel files
+library(ARTool)     # For ANOVA of non-normal distribution
+
+# load prepared and cleaned file from 00_preparation: df_yyyymmdd.csv
+setwd("/Users/nataschastoffel/Documents/GitHub/interoception_NS")
+Data.CRF <- read.xlsx("~/Documents/GitHub/interoception_NS/data/processed/12-2024/Data.CRF_FINAL_20241218.xlsx")
+
+## LOAD  EEG DATA  -----------------------------------------------------------
+# load prepared and cleaned file from 00_preparation: df_yyyymmdd.csv
+df_EEG <- read.xlsx("/Users/nataschastoffel/Documents/GitHub/interoception_NS/data/processed/02-2025/AverageTimeInterval_HEP_summary.xlsx")
+
+df_EEG$pcode <- substr(df_EEG$pcode, 1, 4) # keeps only the first four digits (P001 etc) in the names
+df_EEG$pcode <- sub("^P00", "", df_EEG$pcode) # gets rid of the P00 for all participants
+df_EEG$pcode <- sub("^P0", "", df_EEG$pcode) # gets rid of the P0 for all participants
+df_EEG$pcode <- sub("^P", "", df_EEG$pcode) # gets rid of the P for all participants
+
+df<-merge(Data.CRF, df_EEG, x.by=c("pcode"),y.by=c("pcode"),all.x=TRUE, all.y=TRUE)
+# View(df)
+
+df <- df[complete.cases(df$F8_HEART_510), ] # chose any of the eeg variables; so we remove those participants in our df, that did not complete the HEP study
+# N = 88 in EEG sample
+
+## uploade ECG amplitude (normalized traces)
+df_ecg_amp <- read.xlsx("/Users/nataschastoffel/Documents/GitHub/interoception_NS/data/processed/02-2025/ECG_normalized_amplitude.xlsx")
+df_ecg_amp$pcode <- sub("^P00", "", df_ecg_amp$pcode) # gets rid of the P00 for all participants
+df_ecg_amp$pcode <- sub("^P0", "", df_ecg_amp$pcode) # gets rid of the P0 for all participants
+df_ecg_amp$pcode <- sub("^P", "", df_ecg_amp$pcode) # gets rid of the P for all participants
+
+df <- df %>% mutate(pcode = as.character(pcode))
+df_ecg_amp <- df_ecg_amp %>% mutate(pcode = as.character(pcode))
+df<-merge(df, df_ecg_amp, x.by=c("pcode"),y.by=c("pcode"),all.x=TRUE, all.y=TRUE)
+# View(df)
+
+# define medication intake of interest; those with a considerable effect on the BRAIN (which is all psychotropic medication, benzos, morphiom/opiod pain killers and antiepileitc medication)
+df <- df %>%
+  mutate(medication_brain = if_else(psychotropic_medication == 1 | sleep_benzo == 1 | pain_antiepi == 1 | pain_morph_opio == 1, 1, 0))  # 1=yes so if there is a yes in any of the different medication categories, there will be a 1 in medication_brain
+df %>% filter(is.na(medication_brain)) %>%  select(pcode) # P057 has a NA; manually check, and complement with answer =  NO medication 
+df <- df %>%  mutate(medication_brain = ifelse(pcode == 57, 0, medication_brain))
+
+# create a common depression-anxiety variable as it highly correlates (and to not mess with the models)
+df <- df %>%
+  mutate(anx_dep_SUM = stai_t + bdi) # create one variable for the trait anxiety and depression to use as one variable in the model
+
+#making sure everything is stored as the correct variable
+df$group <- as.factor(df$group)  
+df$sex <- as.factor(df$sex)      
+df$medication_brain <- as.factor(df$medication_brain)  
+df$menopause <- as.factor(df$menopause)  
+df$contraception <- as.factor(df$contraception)  
+df$mc_regularity <- as.factor(df$mc_regularity)  
+
+# define required subgroups
+df_female <- df[df$sex == "1", ]
+df_male <- df[df$sex == "2", ]
+
+df_HC <- df[df$group == "0", ]
+df_FND <- df[df$group == "1", ]
+
+df_med <- df[df$medication_brain == "1", ]
+df_med <- df_med[complete.cases(df_med$pcode), ] 
+df_nomed <- df[df$medication_brain == "0", ]
+df_nomed <- df_nomed[complete.cases(df_nomed$pcode), ] 
+
+```
+
+# 1) Demographics
+
+# 1.1 Difference between groups
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# AGE
+shapiro.test(df$age) #  normally distributed with  p < 0.05
+res<-t.test(df$age[df$group=="1"], df$age[df$group=="0"])
+res # p-value = 0.6338
+summary(df_FND$age)
+summary(df_HC$age)
+
+## check subsample of non-medicated
+  shapiro.test(df_nomed$age) #  normally distributed with  p < 0.05
+  res<-t.test(df_nomed$age[df_nomed$group=="1"], df_nomed$age[df_nomed$group=="0"])
+  res # p = 0.06917
+  summary(df_nomed$age[df_nomed$group=="0"])
+  summary(df_nomed$age[df_nomed$group=="1"])
+
+# SEX
+table_sex_group <- table(df$sex, df$group)
+table_sex_group
+summary(df_FND$sex)
+summary(df_HC$sex)
+# Perform the chi-squared test
+res <- chisq.test(table_sex_group)
+res # X-squared = 5.5335e-31, df = 1, p-value = 1
+  table_sex_group <- table(df_nomed$sex, df_nomed$group)
+  table_sex_group
+  summary(df_nomed$sex[df_nomed$group=="0"])
+  summary(df_nomed$sex[df_nomed$group=="1"])
+  # Perform the chi-squared test
+  res <- chisq.test(table_sex_group)
+  res # X-squared = 0, df = 1, p-value = 1
+
+# BMI
+shapiro.test(df$bmi) #  NOT normally distributed with  p < 0.05
+res<-wilcox.test(df$bmi[df$group=="1"], df$bmi[df$group=="0"])
+res # W = 1203.5, p-value = 0.04171
+
+# Medication
+table_med_group <- table(df$medication_brain, df$group)
+# Perform the chi-squared test
+res <- chisq.test(table_med_group)
+res # X-squared = 22.061, df = 1, p-value = 2.641e-06
+
+# BDI
+shapiro.test(df$bdi) #  NOT normally distributed with  p < 0.05
+res<-wilcox.test(df$bdi[df$group=="1"], df$bdi[df$group=="0"])
+res # X-squared = 22.061, df = 1, p-value = 2.641e-06
+
+# STAI-T
+shapiro.test(df$stai_t) #   normally distributed with  p > 0.05
+res<-t.test(df$stai_t[df$group=="1"], df$stai_t[df$group=="0"])
+res #  t = 3.662, df = 77.319, p-value = 0.0004559
+
+# STAI-S
+shapiro.test(df$stai_s) #   NOT normally distributed with  p > 0.05
+res<-wilcox.test(df$stai_s[df$group=="1"], df$stai_s[df$group=="0"])
+res 
+
+cor.test(df$stai_t, df$stai_s) # r = 0.6728456, p-value = 6.962e-13
+cor.test(df$bdi, df$stai_s) # r = 0.6740379, p-value = 6.125e-13
+cor.test(df$stai_t, df$bdi) # r = 0.7689492 , p-value < 2.2e-16
+
+# HR
+shapiro.test(df$mean_RR_interval_hep) #   normally distributed with  p > 0.05
+res<-t.test(df$mean_RR_interval_hep[df$group=="1"], df$mean_RR_interval_hep[df$group=="0"])
+res # t = -3.2748, df = 85.58, p-value = 0.001527
+
+# HRV
+shapiro.test(df$rmssd_hep) #  NOT normally distributed with  p < 0.05
+res<-wilcox.test(df$rmssd_hep[df$group=="1"], df$rmssd_hep[df$group=="0"])
+res # W = 568, p-value = 0.0008739
+
+# ECG amptlidue
+# Ensure numeric conversion
+df$ecg_amp_250full_norm <- as.numeric(df$ecg_amp_250full_norm)
+df$ecg_amp_285_norm     <- as.numeric(df$ecg_amp_285_norm)
+df$ecg_amp_310_norm     <- as.numeric(df$ecg_amp_310_norm)
+df$ecg_amp_185_norm     <- as.numeric(df$ecg_amp_185_norm)
+
+# Run normality tests
+shapiro.test(df$ecg_amp_250full_norm) # normally distributed with  p > 0.05
+shapiro.test(df$ecg_amp_285_norm)     # NOT normally distributed with  p < 0.05
+shapiro.test(df$ecg_amp_310_norm)     # NOT normally distributed with  p < 0.05
+shapiro.test(df$ecg_amp_185_norm)     # normally distributed with  p > 0.05
+
+# Test difference as a list
+test_results <- list()
+
+test_results[["ecg_amplitude_250full (FND vs HC)"]] <- t.test( df$ecg_amp_250full_norm[df$group == "1"], df$ecg_amp_250full_norm[df$group == "0"])$p.value
+
+test_results[["ecg_amplitude_285 (FND vs HC)"]] <- wilcox.test(df$ecg_amp_285_norm[df$group == "1"],df$ecg_amp_285_norm[df$group == "0"])$p.value
+
+test_results[["ecg_amplitude_310 (FND vs HC)"]] <- wilcox.test( df$ecg_amp_310_norm[df$group == "1"], df$ecg_amp_310_norm[df$group == "0"])$p.value
+
+test_results[["ecg_amplitude_185 (FND vs HC)"]] <- t.test( df$ecg_amp_185_norm[df$group == "1"], df$ecg_amp_185_norm[df$group == "0"])$p.value
+
+# Convert to data frame
+p_values_df <- data.frame(comparison = names(test_results),p_value= unlist(test_results))
+# Adjust for multiple comparisons
+p_values_df$p_adj_fdr <- p.adjust(p_values_df$p_value, method = "fdr")
+# Print results
+print(p_values_df) # NO differences between groups
+
+
+
+#### scholarity
+Data.scholarity <- read.xlsx("~/Documents/GitHub/interoception_NS/data/processed/12-2024/Demographics_Interoception.xlsx")
+
+scholarity_labels <- c(
+  "none",
+  "compulsory school (primary school; 9 years)",
+  "apprenticeship",
+  "Matura (cantonal highschool)",
+  "Higher technical collage (HF or FH)",
+  "bachelor's degree",
+  "master's degree",
+  "PhD",
+  "other")
+
+# Replace numeric codes (0–9; 3 is missing) with labels
+Data.scholarity$highest_education <- factor(
+  Data.scholarity$highest_education,
+  levels = c(0, 1, 2, 4, 5, 6, 7, 8, 9),
+  labels = scholarity_labels)
+
+Data.scholarity$group <- factor(
+  Data.scholarity$group,
+  levels = c(0, 1),
+  labels = c("HC", "FND"))
+
+table_scholarity <- table(Data.scholarity$highest_education, Data.scholarity$group)
+table_scholarity
+
+# save the table as excel
+df_table <- as.data.frame.matrix(table_scholarity)
+df_table <- cbind(Scholarity = rownames(df_table), df_table)
+write_xlsx(df_table, "1.1_scholarity_table.xlsx")
+
+# statistical test
+fisher_test <- fisher.test(table_scholarity)
+fisher_test
+
+```
+
+# 1.2 Effect Sizes
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# calculation of cohens d for variable of interest
+# Define the function
+calculate_cohens_d <- function(data, variable, group_var, group1, group2) {
+  # Subset the data for each group
+  group1_data <- data[[variable]][data[[group_var]] == group1]
+  group2_data <- data[[variable]][data[[group_var]] == group2]
+  
+  # Calculate means and standard deviations
+  mean1 <- mean(group1_data, na.rm = TRUE)
+  mean2 <- mean(group2_data, na.rm = TRUE)
+  sd1 <- sd(group1_data, na.rm = TRUE)
+  sd2 <- sd(group2_data, na.rm = TRUE)
+  
+  # Calculate sample sizes
+  n1 <- sum(!is.na(group1_data))
+  n2 <- sum(!is.na(group2_data))
+  
+  # Calculate pooled standard deviation
+  sd_pooled <- sqrt(((n1 - 1) * sd1^2 + (n2 - 1) * sd2^2) / (n1 + n2 - 2))
+  
+  # Calculate Cohen's d
+  cohens_d <- (mean1 - mean2) / sd_pooled
+  
+  # Return Cohen's d
+  return(cohens_d)}
+
+# Calculate Cohen's d for variables of differences
+cohens_d_bmi <- calculate_cohens_d(df, "bmi", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_bmi) # cohens d of 0.501; FND has HIGHER values than HC
+
+cohens_d_hr <- calculate_cohens_d(df, "mean_RR_interval_hep", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_hr) # cohens d of  -0.6906093; FND has LOWER values than HC
+
+cohens_d_rmssd <- calculate_cohens_d(df, "rmssd_hep", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_rmssd) # cohens d of  -0.7769747; FND has LOWER values than HC
+
+cohens_d_bdi <- calculate_cohens_d(df, "bdi", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_bdi) # cohens d of  1.354997; FND has HIGHER values than HC
+
+cohens_d_stai_t <- calculate_cohens_d(df, "stai_t", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_stai_t)  # cohens d of  0.795104; FND has HIGHER values than HC
+
+cohens_d_stai_s <- calculate_cohens_d(df, "stai_s", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_stai_s)  # cohens d of  1.03966; FND has HIGHER values than HC
+
+cohens_d_anx_dep_SUM <- calculate_cohens_d(df, "anx_dep_SUM", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_anx_dep_SUM)  # cohens d of  1.108273; FND has HIGHER values than HC
+
+cohens_d_sdq <- calculate_cohens_d(df, "sdq", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_sdq) # cohens d of  1.563886; FND has HIGHER values than HC
+
+cohens_d_ctq_total <- calculate_cohens_d(df, "ctq_total", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_ctq_total) # cohens d of  0.6925085; FND has HIGHER values than HC
+
+# for binary variable (medication intake) we calculate the ODDS RATIO
+model <- glm(group ~ psychotropic_medication, data = df, family = binomial)
+summary(model)
+# Extract CI and Odds Ratio
+confint_logit <- confint(model)  # CI on the log-odds scale
+confint_or <- exp(confint_logit) # Exponentiate to get CI for OR
+odds_ratio <- exp(coef(model)) # Calculate Odds Ratios
+results <- cbind(odds_ratio, confint_or) # Combine OR and CI
+results
+                      
+```
+
+# 1.3 Summary Table
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+df_tbl <- df %>%
+  mutate(sex = factor(sex, levels = c("1", "2"), labels = c("female", "male"))) %>%
+  mutate(group = factor(group, levels = c("0", "1"), labels = c("HC", "FND")))  %>%
+  mutate(medication_brain = factor(medication_brain, levels = c("0", "1"), labels = c("no", "yes, intake of these medication"))) %>%
+  mutate(menopause = factor(menopause, levels = c("0", "1"), labels = c("no", "yes, in menopause")))
+
+# Table 1 for Demographics
+Data.t <- select(df_tbl, c("group", "sex", "age", "medication_brain", "bmi", "mean_RR_interval_hep", "rmssd_hep", "bdi", "stai_s", "stai_t"))
+
+tbl1 <- Data.t %>%
+  tbl_summary(
+    by = group, # Grouping by 'group'
+    missing = "no",
+    statistic = list(
+      age = "{mean} ({sd})", 
+      sex = "{n} ({p})", 
+      medication_brain ="{n} ({p})", 
+      bmi = "{median} ({IQR})", 
+      mean_RR_interval_hep = "{mean} ({sd})",
+      rmssd_hep = "{median} ({IQR})",
+      bdi = "{median} ({IQR})",
+      stai_s = "{median} ({IQR})", 
+      stai_t = "{mean} ({sd})" 
+    ),
+    digits = list(age = 1, sex = 1, medication_brain = 1, menopause = 1, bmi = 1, stai_s = 1, stai_t = 1, ctq_total = 1, sdq = 1, mean_RR_interval_hep = 1, rmssd_hep = 1),
+    label = list(
+      age = "Age (mean)",
+      sex = "Sex",
+      medication_brain = "Opioids, benzodiazeptine, psychotropic or antiepileptic medication",
+      bmi = "Body Mass Index (median)",
+      mean_RR_interval_hep = "Heartrate (mean)",
+      rmssd_hep = "Heartrate Variability (median)",
+      bdi = "Depression (median)",
+      stai_s = "State Anxiety (median)",
+      stai_t = "Trait Anxiety (mean)"    )
+  ) %>%
+  modify_header(list(label ~ "**Variable**")) %>%
+  modify_caption("**Demographics Overview**") %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Group**") %>%
+  add_p(
+    test = list(
+      age = "t.test",  # normally distrbuted variables
+      bmi = "wilcox.test",  # non-noramlly distributed variables
+      mean_RR_interval_hep = "t.test", 
+      rmssd_hep = "wilcox.test",
+      bdi = "wilcox.test",
+      stai_s = "wilcox.test", 
+      stai_t = "t.test", 
+      sex = "chisq.test", # equally distributed dichotomous variables 
+      medication_brain = "fisher.test"  # not equally dichotomous distributed 
+    ) ) %>%  add_overall(last = FALSE)
+
+# Print the table
+tbl1
+
+# save the table as excel
+	tbl1_df <- tbl1 %>% as_tibble()
+	write_xlsx(tbl1_df, "1.3_Table_demographics.xlsx")
+
+```
+
+# 1.4 Interoceptive Sensibility
+
+```{r}
+# MAIA
+shapiro.test(df$maia_total) # normally distributed 
+res<-t.test(df$maia_total[df$group=="1"], df$maia_total[df$group=="0"])
+res # t = -3.279, df = 67.778, p-value = 0.001646
+cohens_d_maia <- calculate_cohens_d(df, "maia_total", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_maia) # d = -0.724678
+
+
+# IAS
+shapiro.test(df$ias) # NOT normally distributed with  p < 0.05
+res<-wilcox.test(df$ias[df$group=="1"], df$ias[df$group=="0"])
+res # W = 681, p-value = 0.01951
+cohens_d_ias <- calculate_cohens_d(df, "ias", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_ias) # d = -0.6697022
+
+## VISUALIZATION
+plotBoxplotGroups <- function(df, var, tit) { 
+  plot <- ggplot(df, aes(x = group, y = var, fill = group)) + 
+    geom_boxplot(show.legend = TRUE) + # Show legend for boxplot
+    geom_jitter(shape = 16, position = position_jitter(0.2), size = 2) + # Increase dot size
+    labs(y = "Score") + 
+    theme_classic() + 
+    scale_fill_manual(values = c("#868686FF", "#BB4038")) + 
+    scale_x_discrete(labels = c("HC", "FND")) +  
+    guides(fill = "none") + # Remove the legend
+    ggtitle(tit) +
+    xlab("")
+  return(plot)}
+
+
+p1 <- plotBoxplotGroups(df, (df$maia_total),"MAIA")+ stat_compare_means(method = "t.test", paired = FALSE, label.x = 1.3, size = 5)
+p2 <- plotBoxplotGroups(df, (df$ias),"IAS")+ stat_compare_means(method = "wilcox.test", paired = FALSE, label.x = 1.3, size = 5)
+grid.arrange(p1, p2, ncol = 2)
+
+	pdf("1.4_Plot_MAIA_IAS.pdf")
+	grid.arrange(p1, p2, ncol = 2)
+	dev.off()
+
+
+```
+
+## 1.4.1 MAIA subscores
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+  maia<-dplyr::select(df, pcode, group, maia_attreg, maia_note, maia_distr, maia_worry, maia_aware, maia_sfreg, maia_body, maia_trust)
+  
+  #Make long data
+  maia_long <- gather(maia, key = "subscale", value = "score", -pcode, -group) # make data set long
+  maia_long$subscale<-as.factor(maia_long$subscale)
+ maia_long$subscale <- factor(maia_long$subscale, levels = rev(levels(maia_long$subscale)))
+  
+ # label the variables correctly
+  maia_long$score<-as.numeric(maia_long$score)
+  maia_long$group<-as.factor(maia_long$group)
+  maia_long$group <- factor(maia_long$group, levels = c(0, 1), labels = c("HC", "FND"))
+  
+  # Calculate mean, median, CI, SE
+  library(dplyr)
+  alpha=0.05
+  maia.summary <- maia_long %>%
+    group_by(group,subscale)%>%
+    dplyr::summarise(
+      se = sd(score) / sqrt(length(score)),
+      t=qt((1-alpha)/2 + .5, length(score)-1),   # tend to 1.96 if sample size is big enough
+      CI=t*se, 
+      score = mean(score), .groups = 'drop') # you can use here mean or median depending on data distribution
+  
+  maia.summary # according to this order name the lables in the following plot p
+  
+  # STATISTICS
+  # Multiple t-tests using FDR correction for multiple comparisons (FDR or bonferroni)
+  library(rstatix)
+  stat.test <- maia_long %>%
+    group_by(subscale) %>%
+    t_test(score ~ group) %>%
+    adjust_pvalue(method = "fdr") %>% # correct for multiple comparision (as they are subscales)
+    add_significance()
+  stat.test # subscales worrying, trusting, body and attention regulation are sig difference across groups
+  
+  # Filter for significant results (both * and **)
+  significant_results <- stat.test %>%
+    filter(p.adj.signif %in% c("*", "**")) %>%
+    select(subscale, p.adj.signif)  # Keep both subscale and significance level
+  
+  # VISUALIZATION
+  # Plot
+  library(ggsignif)
+  maia.summary <- maia.summary %>%
+    left_join(significant_results, by = "subscale") %>%
+    mutate(significance = ifelse(is.na(p.adj.signif), "", p.adj.signif))
+  
+  dodge <- position_dodge(width=0.9)
+  maiaplot <- maia.summary %>%
+  ggplot(aes(y = score, x = subscale, ymin = score - CI, ymax = score + CI, fill = group)) +
+  geom_bar(position = position_dodge(), stat = "identity") +
+  geom_errorbar(position = position_dodge(width = 0.9), width = 0.3) +
+  labs(x = "MAIA Subscales", y = "Scores") +
+  scale_fill_manual(values = c("#868686FF", "#BB4038")) +
+  ggtitle("MAIA - Interoceptive Awareness") +
+  theme_classic(base_size = 9) +
+  scale_x_discrete(labels = c("Not-Worrying", "Trusting", "Self-Regulation", "Noticing", 
+                              "Not-Distracting", "Body Listening", "Emotional Awareness", "Attention Regulation")) +
+  guides(fill = guide_legend(title = "Groups"))
+  
+  maiaplot
+  
+	pdf("1.4.1_MAIAsubscales.pdf")
+	maiaplot
+	dev.off()
+  
+```
+
+# 2) Clinical Supplements
+
+## 2.1 Clinical Commorbidities
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# Select the relevant columns and include the calculated duration
+Data.t <- dplyr::select(df, c("group", "pain_medication", "psychotropic_medication", "sleep_medication", "other_medication", "ADS_ADD", "psychiatric_disorder", "hormonal_dysfunction", "other_diagnosis", "contraception", "menopause", "mc_regularity"))
+
+Data.t <- Data.t  %>%
+  mutate(group = factor(group, levels = c("0", "1"), labels = c("HC", "FND")))
+
+tbl2 <- Data.t %>%
+  tbl_summary(
+    by = group,
+    missing = "no",
+    statistic = list(
+      pain_medication = "{n} ({p}%)",
+      psychotropic_medication = "{n} ({p}%)",
+      sleep_medication = "{n} ({p}%)",
+      other_medication = "{n} ({p}%)",
+      ADS_ADD = "{n} ({p}%)",
+      psychiatric_disorder = "{n} ({p}%)",
+      hormonal_dysfunction = "{n} ({p}%)",
+      other_diagnosis = "{n} ({p}%)",
+      contraception = "{n} ({p}%)",
+      menopause = "{n} ({p}%)",
+      mc_regularity = "{n} ({p}%)"
+    ),
+    label = list(
+      pain_medication = "Intake of Pain Medication [yes]",
+      psychotropic_medication = "Intake of Psychotropic Medication [yes]",
+      sleep_medication = "Intake of Sleep Medication [yes]",
+      other_medication = "Intake of Other Medication [yes]",
+      ADS_ADD = "Comorbidity of ADS or AD(H)D [yes]",
+      psychiatric_disorder = "Comorbidity of Psychiatric Disorder [yes]",
+      hormonal_dysfunction = "Comorbidity of Hormonal Dysfunction [yes]",
+      other_diagnosis = "Comorbidity of other Diagnosis [yes]",
+      contraception = "Intake of Hormonal Contraception [yes]",
+      menopause = "in Menopause [yes]",
+      mc_regularity = "Regular, natural cycle [yes]"
+    )
+  ) %>%
+  modify_header(list(label ~ "**Variable**")) %>%
+  modify_caption("**Clinical Characteristics**") %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Group**") %>%
+  add_p(test = everything() ~ "fisher.test") %>%
+  add_overall(last = FALSE)
+
+tbl2
+  
+  # save table
+	tbl2_df <- tbl2 %>% as_tibble()
+	write_xlsx(tbl1_df, "2.1_Table_clinical_characteristics.xlsx")
+
+Data.t <- dplyr::select(df_female, c("group", "contraception", "menopause", "mc_regularity"))
+
+Data.t <- Data.t  %>%
+  mutate(group = factor(group, levels = c("0", "1"), labels = c("HC", "FND")))
+
+tbl2.2 <- Data.t %>%
+  tbl_summary(
+    by = group,
+    missing = "no",
+    statistic = list(
+      contraception = "{n} ({p}%)",
+      menopause = "{n} ({p}%)",
+      mc_regularity = "{n} ({p}%)" ),
+    label = list(
+      contraception = "Intake of Hormonal Contraception [yes]",
+      menopause = "in Menopause [yes]",
+      mc_regularity = "Regular, natural cycle [yes]") ) %>%
+  modify_header(list(label ~ "**Variable**")) %>%
+  modify_caption("**Clinical Characteristics**") %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Group**") %>%
+  add_p(test = everything() ~ "fisher.test") %>%
+  add_overall(last = FALSE)
+
+tbl2.2
+
+  # save table
+	tbl2_df <- tbl2.2 %>% as_tibble()
+	write_xlsx(tbl1_df, "2.1_Table_clinical_characteristics_female.xlsx")
+
+```
+
+## 2.2 FND subtypes
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# create variable of duation of months
+library(gtsummary)
+library(dplyr)
+
+# Select relevant columns from df_tbl
+Data.t <- select(df_FND, c("sex", "diagnosis", "fds", "motor", "weakness", "sensory", "pppd", "cognitive"))
+
+# Create the summary table
+tbl3 <- Data.t %>%
+  tbl_summary(
+    by = sex,
+    missing = "no",
+    statistic = list(
+      fds = "{n} ({p})",
+      motor = "{n} ({p})",
+      weakness = "{n} ({p})",
+      sensory = "{n} ({p})",
+      pppd = "{n} ({p})",
+      cognitive = "{n} ({p})"),
+    digits = list(duration_months = 1,fds = 1,motor = 1,weakness = 1,sensory = 1,pppd = 1,cognitive = 1),
+    label = list(
+      sex = "Sex",
+      fds = "Functional Dissociative Seizures [yes]",
+      motor = "motor + symptoms [yes]",
+      weakness = "motor - symptoms [yes]",
+      sensory = "sensory symptoms [yes]",
+      pppd = "dizziness (PPPD) [yes]",
+      cognitive = "cognitive symptoms [yes]"
+    )
+  ) %>%
+  modify_header(list(label ~ "**Variable**")) %>%
+  modify_caption("**Clinical Characteristics**") %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Group**") %>%
+  add_overall(last = FALSE)
+
+# Print the summary table
+tbl3
+
+  # save table
+	tbl2_df <- tbl3 %>% as_tibble()
+	write_xlsx(tbl1_df, "2.2_Table_FNDsubtypes.xlsx")
+
+summary(df_FND$duration_months)
+sd(df_FND$duration_months) 
+
+## additional table for diagnosis (instead of symptoms)
+df_FND$diagnosis
+
+# Define diagnosis labels
+diagnosis_labels <- c(
+  "44.5 Functional/Dissociative Seizures",
+  "44.4 motor FND",                       
+  "44.4 motor FND",                       
+  "44.6 sensory FND",                     
+  "44.7 mixed FND")
+
+# Recode diagnosis
+df_FND$diagnosis <- dplyr::case_when(df_FND$diagnosis == 1 ~ diagnosis_labels[1],
+  df_FND$diagnosis %in% c(2, 3) ~ diagnosis_labels[2],
+  df_FND$diagnosis == 4 ~ diagnosis_labels[4],
+  df_FND$diagnosis == 5 ~ diagnosis_labels[5],
+  TRUE ~ "Other")
+
+# Convert to factors
+df_FND$diagnosis <- factor(df_FND$diagnosis)
+df_FND$sex <- factor(df_FND$sex, levels = c(1, 2), labels = c("Female", "Male"))
+
+# Create contingency table
+table_diagnosis <- table(df_FND$diagnosis, df_FND$sex)
+print(table_diagnosis)
+
+# Convert to data frame
+df_table <- as.data.frame.matrix(table_diagnosis)
+df_table <- cbind(Diagnosis = rownames(df_table), df_table)
+writexl::write_xlsx(df_table, "2.2_diagnosis_FND.xlsx")
+
+```
+
+# 3) HBT: group differences
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# non paramatric wilcox test for NOT normally distributed data 
+shapiro.test(df$hbt_accuracy_mean) # NOT normally distributed
+res<-wilcox.test(df$hbt_accuracy_mean[df$group=="1"], df$hbt_accuracy_mean[df$group=="0"])
+res #  p-value = 0.06046
+cohens_d_hbt_mean <- calculate_cohens_d(df, "hbt_accuracy_mean", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_hbt_mean) #-0.4293561
+
+shapiro.test(df$hbt_change_accuracy) # NOT normally distributed
+res<-wilcox.test(df$hbt_change_accuracy[df$group=="1"], df$hbt_change_accuracy[df$group=="0"])
+res  # no sig difference between groups
+
+shapiro.test(df$hbt_confidence_mean) # NOT normally distributed
+res<-wilcox.test(df$hbt_confidence_mean[df$group=="1"], df$hbt_confidence_mean[df$group=="0"])
+res # no sig difference between groups
+
+shapiro.test(df$hbt_change_confidence) #  normally distributed
+res<-t.test(df$hbt_change_confidence[df$group=="1"], df$hbt_change_confidence[df$group=="0"])
+res  # no sig difference between groups
+
+shapiro.test(df$hbt_intensity_mean) # NOT normally distributed
+res<-wilcox.test(df$hbt_intensity_mean[df$group=="1"], df$hbt_intensity_mean[df$group=="0"])
+res# no sig difference between groups
+
+```
+
+## 3.1 Summary Table
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+Data.t <- select(df_tbl, c("group", "hbt_accuracy_mean", "hbt_confidence_mean", "hbt_intensity_mean", "hbt_easiness_mean", "hbt_change_accuracy", "hbt_change_confidence", "maia_total", "traitPE_maiaHBT", "ias", "traitPE_iasHBT"))
+library(gtsummary)
+tbl_hbt <- Data.t %>%
+  tbl_summary(
+    by = group,
+    missing = "no",
+    statistic = list(
+      hbt_accuracy_mean = "{median} ({IQR})",
+      hbt_confidence_mean = "{median} ({IQR})",
+      hbt_intensity_mean = "{median} ({IQR})",
+      hbt_easiness_mean = "{median} ({IQR})",
+      hbt_change_accuracy = "{median} ({IQR})",
+      hbt_change_confidence = "{median} ({IQR})",
+      maia_total = "{median} ({IQR})",
+      traitPE_maiaHBT = "{median} ({IQR})",
+      ias = "{median} ({IQR})",
+      traitPE_iasHBT = "{median} ({IQR})"    ),
+    digits = list(hbt_accuracy_mean = 1, hbt_confidence_mean = 1, hbt_intensity_mean = 1, hbt_easiness_mean = 1, 
+                  hbt_change_accuracy = 1, hbt_change_confidence = 1, hep_focus = 1, hep_difficulty = 1, hep_intensity = 1, 
+                  maia_total = 1, traitPE_maiaHBT = 1,ias = 1, traitPE_iasHBT = 1),
+    label = list(hbt_accuracy_mean = "HBT accuracy",
+                 hbt_confidence_mean= "HBT confidence",
+                 hbt_intensity_mean= "HBT intensity",
+                 hbt_easiness_mean= "HBT easiness",
+                 hbt_change_accuracy= "HBT change in accuracy",
+                 hbt_change_confidence = "HBT change in confidence",
+                 maia_total = "Interoceptive Awareness (MAIA)",
+                 traitPE_maiaHBT= "Trait-Prediction-Error (MAIA-HBT)",
+                 ias= "Interoceptive Accuracy Self-Report (IAS)",
+                 traitPE_iasHBT = "Trait-Prediction-Error (IAS-HBT)")
+  ) %>%
+  modify_header(list(label ~ "**Variable**")) %>%
+  modify_caption("**Interoception Overview**") %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Group**") %>%
+  add_p(test = everything() ~ "wilcox.test") %>% 
+  add_overall(last = FALSE)
+
+tbl_hbt
+
+  # Save as png table
+  gt_table <- as_gt(tbl_hbt) # convert to gt table
+  output_path <- file.path("3.1_Table_HBT.png")
+  gt::gtsave(gt_table, filename = output_path)
+
+  # Save as xlsx table
+  df_table <- as_tibble(tbl_hbt)
+  output_path <- file.path("3.1_Table_HBT.xlsx")
+  write_xlsx(df_table, path = output_path)
+  
+```
+
+## 3.2 Change across Condition
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+
+hbt <- dplyr::select(df, pcode, group, hbt_accuracy_neutral, hbt_accuracy_arousal) 
+
+# Make data long
+library(tidyverse)
+library(dplyr)
+long_data <- gather(hbt, key = "HBT", value = "score", -pcode, -group) # make data set long 
+long_data$HBT<-plyr::revalue(long_data$HBT, c("hbt_accuracy_neutral"="Neutral","hbt_accuracy_arousal" ="Arousal"))
+long_data$HBT<-as.factor(long_data$HBT)
+long_data$HBT <- factor(long_data$HBT, levels = rev(levels(long_data$HBT)))
+
+# faceted, separate graphs per condition
+library(ggplot2)
+HBTplot <- ggplot(long_data, aes(x = HBT, y = score, group = pcode, color = group, alpha = 0.8)) +
+  geom_line() + 
+  geom_point() +
+  facet_grid(. ~ group) + # Zum nach Gruppe unterteilen
+  labs(title = "Change in HBT - Neutral vs. Arousal",
+       x = "Heartbeat Tracking Task",
+       y = "Accuracy Score",
+       color = "Group") +
+  theme_minimal() +   
+  stat_smooth(aes(group = group, color = group), color = "black") + # Brauchts für die CI
+  stat_summary(aes(group = group, color = group), geom = "point", fun = mean, shape = 17, size = 3.5, color = "black")+ # zum mean machen (die dickere linie, kannst du auch noch dicker machen)
+  scale_alpha(guide = 'none') +
+  scale_color_manual(values = c("black", "#E95248"), labels = c("HC", "FND"))
+HBTplot
+
+	pdf("3.2_Plot_HBTchange_acc.pdf")
+	HBTplot
+	dev.off()
+	
+# statistics:
+res_FND<-wilcox.test(df$hbt_accuracy_neutral[df$group=="1"], df$hbt_accuracy_neutral[df$group=="1"], paired = TRUE)
+res_FND #  no sig difference between condition in FND
+res_HC<-wilcox.test(df$hbt_accuracy_arousal[df$group=="0"], df$hbt_accuracy_arousal[df$group=="0"], paired = TRUE)#  no sig difference between condition in HC
+res_HC
+
+  # Capture stat output as text
+  res_FND_text <- capture.output(print(res_FND))
+  res_HC_text <- capture.output(print(res_HC))
+  results_text <- c("### Wilcoxon Test: FND Group ###", res_FND_text, 
+                  "", "### Wilcoxon Test: HC Group ###", res_HC_text)
+  writeLines(results_text, "3.2_stats_HBTchange_acc.txt")
+
+# same thing for confidence
+hbt_confidence <- dplyr::select(df, pcode, group, hbt_confidence_neutral, hbt_confidence_arousal) 
+long_data_confidence <- gather(hbt_confidence, key = "HBT", value = "score", -pcode, -group) # make data set long 
+long_data_confidence$HBT<-revalue(long_data_confidence$HBT, c("hbt_confidence_neutral"="Neutral","hbt_confidence_arousal" ="Arousal"))
+long_data_confidence$HBT<-as.factor(long_data_confidence$HBT)
+long_data_confidence$HBT <- factor(long_data_confidence$HBT, levels = rev(levels(long_data_confidence$HBT)))
+
+HBTplot <- ggplot(long_data_confidence, aes(x = HBT, y = score, group = pcode, color = group, alpha = 0.8)) +
+  geom_line() + 
+  geom_point() +
+  facet_grid(. ~ group) + 
+  labs(title = "Change in HBT confidence - Neutral vs. Arousal",
+       x = "Heartbeat Tracking Task",
+       y = "confidence Score",
+       color = "Group") +
+  theme_minimal() +   
+  stat_smooth(aes(group = group, color = group), color = "black") + # Brauchts für die CI
+  stat_summary(aes(group = group, color = group), geom = "point", fun = mean, shape = 17, size = 3.5, color = "black")+ 
+  scale_alpha(guide = 'none')+
+  scale_color_manual(values = c("black", "#E95248"), labels = c("HC", "FND")) # Custom labels for 0 and 1
+
+	pdf("3.2_Plot_HBTchange_conf.pdf")
+	HBTplot
+	dev.off()
+	
+# statistics:
+res_FND<-wilcox.test(df$hbt_confidence_neutral[df$group=="1"], df$hbt_confidence_arousal[df$group=="1"], paired = TRUE)
+res_FND #  no sig difference between condition in FND
+res_HC<-wilcox.test(df$hbt_confidence_neutral[df$group=="0"], df$hbt_confidence_arousal[df$group=="0"], paired = TRUE)#  no sig difference between condition in HC
+res_HC
+
+  # Capture stat output as text
+  res_FND_text <- capture.output(print(res_FND))
+  res_HC_text <- capture.output(print(res_HC))
+  results_text <- c("### Wilcoxon Test: FND Group ###", res_FND_text, 
+                  "", "### Wilcoxon Test: HC Group ###", res_HC_text)
+  writeLines(results_text, "3.2_stats_HBTchange_conf.txt")
+
+
+```
+
+# 4) HEP: debriefing questions (control analysis)
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+hist(df$hep_difficulty_heart)
+shapiro.test(df$hep_difficulty_heart)  # NOT normally distributed with  p < 0.05
+shapiro.test(df$hep_difficulty_heart[df$group == "1"]) # within patients hep difficulty heart is NOT normally distributed with  p < 0.05
+shapiro.test(df$hep_difficulty_heart[df$group == "0"]) # within controls hep difficulty heart is NOT normally distributed with  p < 0.05
+summary(df$hep_difficulty_heart)
+summary(df_FND$hep_difficulty_heart)
+summary(df_HC$hep_difficulty_heart)
+
+hist(df$hep_difficulty_sound)
+shapiro.test(df$hep_difficulty_sound)  # NOT normally distributed with  p < 0.05
+shapiro.test(df$hep_difficulty_sound[df$group == "1"]) # within patients hep difficulty sound is NOT normally distributed with  p < 0.05
+shapiro.test(df$hep_difficulty_sound[df$group == "0"]) # within controls hep difficulty sound is NOT normally distributed with  p < 0.05
+summary(df$hep_difficulty_sound)
+summary(df_FND$hep_difficulty_sound)
+summary(df_HC$hep_difficulty_sound)
+
+# Create an empty list to store p-values
+test_results <- list()
+
+# Function to compute Wilcoxon test and store p-values
+store_p_value <- function(name, group1, group2, paired=FALSE) {
+  test_results[[name]] <<- wilcox.test(group1, group2, paired=paired)$p.value}
+
+# Between-group comparisons
+store_p_value("hep_difficulty_heart (FND vs HC)", df$hep_difficulty_heart[df$group=="1"], df$hep_difficulty_heart[df$group=="0"])
+store_p_value("hep_difficulty_sound (FND vs HC)", df$hep_difficulty_sound[df$group=="1"], df$hep_difficulty_sound[df$group=="0"])
+
+# Within-group (paired) comparisons
+store_p_value("hep_difficulty (FND: sound vs heart)", df_FND$hep_difficulty_sound, df_FND$hep_difficulty_heart, paired=TRUE)
+store_p_value("hep_difficulty (HC: sound vs heart)", df_HC$hep_difficulty_sound, df_HC$hep_difficulty_heart, paired=TRUE)
+
+# Between-group comparisons for focus
+store_p_value("hep_focus_heart (FND vs HC)", df$hep_focus_heart[df$group=="1"], df$hep_focus_heart[df$group=="0"])
+store_p_value("hep_focus_sound (FND vs HC)", df$hep_focus_sound[df$group=="1"], df$hep_focus_sound[df$group=="0"])
+
+# Within-group (paired) comparisons for focus
+store_p_value("hep_focus (FND: sound vs heart)", df_FND$hep_focus_sound, df_FND$hep_focus_heart, paired=TRUE)
+store_p_value("hep_focus (HC: sound vs heart)", df_HC$hep_focus_sound, df_HC$hep_focus_heart, paired=TRUE)
+
+# Between-group comparisons for intensity
+store_p_value("hep_intensity_heart (FND vs HC)", df$hep_intensity_heart[df$group=="1"], df$hep_intensity_heart[df$group=="0"])
+store_p_value("hep_intensity_sound (FND vs HC)", df$hep_intensity_sound[df$group=="1"], df$hep_intensity_sound[df$group=="0"])
+
+# Within-group (paired) comparisons for intensity
+store_p_value("hep_intensity (FND: sound vs heart)", df_FND$hep_intensity_sound, df_FND$hep_intensity_heart, paired=TRUE)
+store_p_value("hep_intensity (HC: sound vs heart)", df_HC$hep_intensity_sound, df_HC$hep_intensity_heart, paired=TRUE)
+
+# Convert list to dataframe
+p_values_df <- data.frame(
+  Comparison = names(test_results),
+  p_value = unlist(test_results))
+
+# Apply FDR correction
+p_values_df$p_adj_fdr <- p.adjust(p_values_df$p_value, method = "fdr")
+
+# Print results
+print(p_values_df)
+
+  # Save as a text file
+  write.table(p_values_df, "4_debriefing.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+
+# Calculating cohens d for diferent self-reported difficutly
+cohens_d_difficulty_heart <- calculate_cohens_d(df, "hep_difficulty_heart", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_difficulty_heart) 
+
+```
+
+## 4.1 Summary Table
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+### Summary Table for debriefing questionnaire ---------------------------------------------
+df_tbl <- df %>%
+  mutate(group = factor(group, levels = c("0", "1"), labels = c("HC", "FND")))
+
+Data.t <- select(df_tbl, c("group","hep_difficulty_heart", "hep_difficulty_sound", "hep_focus_heart", "hep_focus_sound", "hep_intensity_heart", "hep_intensity_sound"))
+library(gtsummary)
+library(gtsummary)
+library(dplyr)
+
+# Create the table summary
+tbl_hep <- Data.t %>%
+  tbl_summary(
+    by = group, # Grouping by 'group'
+    missing = "no",
+    statistic = list(
+      hep_difficulty_heart = "{median} ({IQR})", 
+      hep_difficulty_sound = "{median} ({IQR})", 
+      hep_focus_heart ="{median} ({IQR})", 
+      hep_focus_sound = "{median} ({IQR})", 
+      hep_intensity_heart = "{median} ({IQR})", 
+      hep_intensity_sound = "{median} ({IQR})" ),
+    digits = list(hep_difficulty_heart = 1, hep_difficulty_sound = 1, hep_focus_heart = 1, hep_focus_sound = 1, hep_intensity_heart = 1, hep_intensity_sound = 1),
+    label = list(
+      hep_difficulty_heart = "Easiness to perceive Heartbeat",
+      hep_difficulty_sound = "Easiness to perceive Sound",
+      hep_focus_heart = "Ability to focus on Heartbeat",
+      hep_focus_sound = "Ability to focus on Sound",
+      hep_intensity_heart = "Intensity of perceived Heartbeat",
+      hep_intensity_sound = "Intensity of perceived Sound") ) %>%
+  modify_header(list(label ~ "**Variable**")) %>%
+  modify_caption("**Control Question**") %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Group**") %>%
+  add_p(
+    test = list(
+      hep_difficulty_heart = "wilcox.test", 
+      hep_difficulty_sound = "wilcox.test", 
+      hep_focus_heart = "wilcox.test", 
+      hep_focus_sound = "wilcox.test",
+      hep_intensity_heart = "wilcox.test", 
+      hep_intensity_sound = "wilcox.test"  )) %>% 
+  add_overall(last = FALSE)
+
+# Print the table
+tbl_hep
+
+  # save table
+	tbl1_df <- tbl_hep %>% as_tibble()
+	write_xlsx(tbl1_df, "4.1_Table_debriefing.xlsx")
+
+```
+
+# 5) HEP : explorative approach
+
+We extracted the individual scores for the significant time intervals and electrodes / GMD / GFP obtained from the EEG analysis (done in Carool and EEGpal)
+
+TRACE ANALYSIS:
+
+-   F1 for 185-210ms when focusing on heart
+
+-   F8 for 540-550s when focusing on sound (supplements)
+
+-   P6 for 620-630ms when focusing on sound (supplements)
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+### Getting cohens d for the differences in traces across group
+res<-wilcox.test(df$F1_HEART_185[df$group=="1"], df$F1_HEART_185[df$group=="0"])
+res #    
+cohens_d_F1 <- calculate_cohens_d(df, "F1_HEART_185", "group", 1, 0) # group 1=FND, group=0 HC
+print(cohens_d_F1) #  -0.8010937
+```
+
+## 5.1 Testing for Covariates
+
+demographic covariates: testing whether differences will stay when controlling for covariates
+
+### 5.1.1 GLOBAL : interaction and group effects GFP and GMD
+
+GLOBAL ANALYSIS
+
+-   main effect of CONDITION:
+
+    -   GMD at 510-524ms
+
+-   interaction effect of CONDITIONxGROUP:
+
+    -   GFP at 286-298ms
+
+    -   GMD at 310-321ms
+
+Please note: The topographical differences as main effect condition and interaction were identified using RAGU software (randomization statistics) using a Topographical ANOVA. This cannot be extracted as one value (unlike the GFP for example). We nonetheless extracted the Global Map Dissimilarity SChore (GMD) - which is not identical to the TANOVA results, but an approach to operationalize topographical differences with one value. Hence, the results should be interepreted with care.
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# for the Interaction Effects we need the long data format
+# Subset and rename EEG variables
+df_subset <- df |>
+ select( pcode, group, sex, age, medication_brain, anx_dep_SUM, #covariates to add
+  rmssd_hep, mean_RR_interval_hep, ecg_amp_310_norm, ecg_amp_285_norm, # ecg for later
+  GMD_HEART_310, GMD_SOUND_310, # interaction
+  GFP_HEART_285, GFP_SOUND_285, # interaction
+  GMD_HEART_510, GMD_SOUND_510 ) # main effect group
+
+# Reshape to long format for GMD_310
+df_gmd_long <- df_subset %>%
+  pivot_longer(cols = c(GMD_HEART_310, GMD_SOUND_310),
+    names_to = "condition",
+    values_to = "EEG_Value") %>%
+  mutate(CONDITION = if_else(grepl("HEART", condition), "HEART", "SOUND"),
+    EEG_Type = "GMD_310" )
+
+# Reshape to long format for GFP_285
+df_gfp_long <- df_subset %>%
+  pivot_longer(cols = c(GFP_HEART_285, GFP_SOUND_285),
+    names_to = "condition",
+    values_to = "EEG_Value" ) %>%
+  mutate(CONDITION = if_else(grepl("HEART", condition), "HEART", "SOUND"),
+    EEG_Type = "GFP_285")
+
+# GMD_310 LINEAR MIXED EFFECTS MODEL without covariates (random effect for subject included to account for the rpeated measures)
+model_gmd <- lmer(
+  EEG_Value ~ group * CONDITION + (1 | pcode),
+  data = df_gmd_long)
+summary(model_gmd)
+
+# GMD_310 model LINEAR MIXED EFFECTS MODEL with covariates as fixed effects included
+model_gmd_cov <- lmer(
+  EEG_Value ~ group * CONDITION + sex + age  + rmssd_hep + mean_RR_interval_hep + (1 | pcode),
+  data = df_gmd_long)
+summary(model_gmd_cov)
+
+# GMD_310 model LINEAR MIXED EFFECTS MODEL with ECG trace as covariates as fixed effects included
+model_gmd_cov <- lmer(
+  EEG_Value ~ group * CONDITION +  ecg_amp_310_norm + (1 | pcode),
+  data = df_gmd_long)
+summary(model_gmd_cov)
+
+# GFP_285 LINEAR MIXED EFFECTS MODEL without covariates (random effect for subject included to account for the repeated measures)
+model_gfp <- lmer(
+  EEG_Value ~ group * CONDITION + (1 | pcode),
+  data = df_gfp_long)
+summary(model_gfp) # interaction effect: p = 0.0302
+
+# with linear mixed effect models the inclusion of covariates does not lead to differences in values, as they control for between group differences (and within group it does not change)
+
+#  GFP_285 model LINEAR MIXED EFFECTS MODEL with ECG trace as covariates as fixed effects included
+model_gfp_cov <- lmer(
+  EEG_Value ~ group * CONDITION + ecg_amp_285_norm + (1 | pcode),
+  data = df_gfp_long)
+summary(model_gfp_cov) # effect of ECG amplitude
+
+
+# FULL GFP_285 model LINEAR MIXED EFFECTS MODEL with ALL covariates as fixed effects included
+model_gfp_cov <- lmer(
+  EEG_Value ~ group * CONDITION +  sex + age +  rmssd_hep + mean_RR_interval_hep  + medication_brain + anx_dep_SUM + (1 | pcode),
+  data = df_gfp_long)
+summary(model_gfp_cov) ## interaction still sig (along with sex)
+
+
+############ SUPPLEMENTS
+# Reshape to long format for GMD_510
+df_gmdmain_long <- df_subset %>%
+  pivot_longer(cols = c(GMD_HEART_510, GMD_SOUND_510),
+    names_to = "condition",
+    values_to = "EEG_Value" ) %>%
+  mutate(CONDITION = if_else(grepl("HEART", condition), "HEART", "SOUND"),
+    EEG_Type = "GMD_510")
+
+# GMD_510 LINEAR MIXED EFFECTS MODEL without covariates (random effect for subject included to account for the rpeated measures)
+model_gmdmain <- lmer(
+  EEG_Value ~ group * CONDITION + (1 | pcode),
+  data = df_gmdmain_long)
+summary(model_gmdmain)
+
+# GMD_510 model LINEAR MIXED EFFECTS MODEL with covariates as fixed effects included
+model_gmdmain_cov <- lmer(
+  EEG_Value ~ group * CONDITION + sex + age + (1 | pcode),
+  data = df_gmdmain_long)
+summary(model_gmdmain_cov) # sex as a main effect
+
+# GMD_510 model LINEAR MIXED EFFECTS MODEL with covariates as fixed effects included
+model_gmdmain_cov <- lmer(
+  EEG_Value ~ group * CONDITION + rmssd_hep + mean_RR_interval_hep + (1 | pcode),
+  data = df_gmdmain_long)
+summary(model_gmdmain_cov) # no interaction
+
+# GMD_510 model LINEAR MIXED EFFECTS MODEL with covariates as fixed effects included
+model_gmdmain_cov <- lmer(
+  EEG_Value ~ group * CONDITION + anx_dep_SUM + medication_brain + (1 | pcode),
+  data = df_gmdmain_long)
+summary(model_gmdmain_cov) # only medication brain
+
+
+# FULL GMD_510 model LINEAR MIXED EFFECTS MODEL with ALL (full model) covariates as fixed effects included
+model_gmdmain_cov <- lmer(
+  EEG_Value ~ group * CONDITION + sex + age + rmssd_hep + mean_RR_interval_hep + anx_dep_SUM + medication_brain + (1 | pcode),
+  data = df_gmdmain_long)
+summary(model_gmdmain_cov) ### sex and medication
+
+
+```
+### 5.1.2 TRACE: Group differences in F1 (and F8 and P6 for control condition)
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+
+# For trace F1 of focusing on the heart
+lm <- lm(formula = F1_HEART_185 ~ group + sex + age,
+          data = df) 
+summary(lm) # GROUP P = 0.000374
+
+lm <- lm(formula = F1_HEART_185 ~ group + rmssd_hep + mean_RR_interval_hep, data = df) 
+summary(lm) # GROUP p = 0.000754
+
+lm <- lm(formula = F1_HEART_185 ~ group + ecg_amp_185_norm,
+          data = df) 
+summary(lm) # GROUP, p = 0.000278
+
+###  PSYCHIATRIC
+lm <- lm(formula = F1_HEART_185 ~ group + medication_brain + anx_dep_SUM,
+          data = df) 
+summary(lm) # GROUP, p = 5.69e-05
+
+#### FULL MODEL (including all covariates to see whether this way the effect will remain as well - however this is not reported in mansucript; model might be overfittedD)
+lm <- lm(formula = F1_HEART_185 ~ group + sex + age + rmssd_hep + mean_RR_interval_hep+ medication_brain + anx_dep_SUM,
+          data = df) 
+summary(lm) # GROUP P = 0.000176
+
+############ SUPPLEMENTS
+# For trace F8 of focusing on the sound
+lm <- lm(formula = F8_SOUND_540 ~ group + sex + age,
+          data = df) 
+summary(lm) # GROUP, p = 0.00029
+
+### Cardiac
+lm <- lm(formula = F8_SOUND_540 ~ group +rmssd_hep + mean_RR_interval_hep,
+          data = df) 
+summary(lm) # GROUP, p = 0.00108
+
+### Psychiatric
+lm <- lm(formula = F8_SOUND_540 ~ group + medication_brain + anx_dep_SUM,
+          data = df) 
+summary(lm) # GROUP, p = 0.00416
+
+### FULL MODEL (including all covariates to see whether this way the effect will remain as well - however this is not reported in mansucript; model might be overfittedD)
+lm <- lm(formula = F8_SOUND_540 ~ group + sex + age + rmssd_hep + mean_RR_interval_hep + medication_brain + anx_dep_SUM,
+          data = df) 
+summary(lm) # GROUP still, p = 0.0108
+
+# For trace P6 of focusing on the sound
+lm <- lm(formula = P6_SOUND_620 ~ group + sex + age,
+          data = df) 
+summary(lm) # GROUP, p = 0.00145
+
+### Cardiac
+lm <- lm(formula = P6_SOUND_620 ~ group + rmssd_hep + mean_RR_interval_hep,
+          data = df) 
+summary(lm) # GROUP, p = 0.00574
+
+### Psychiatric
+lm <- lm(formula = P6_SOUND_620 ~ group + medication_brain + anx_dep_SUM,
+          data = df) 
+summary(lm) # NOT SIG ANYMORE: GROUP p= 0.0748
+
+### FULL MODEL (including all covariates to see whether this way the effect will remain as well - however this is not reported in mansucript; model might be overfittedD)
+lm <- lm(formula = P6_SOUND_620 ~ group + sex + age + rmssd_hep + mean_RR_interval_hep + medication_brain + anx_dep_SUM,
+          data = df) 
+summary(lm) # NOT SIG ANYMORE; GROUP p= 0.1168
+
+```
+
+
+## 5.2 Predicting Symptom Severity with EEG markers activity: FND only interoceptive condition
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# predicting symptom severity -----
+df_sfmdrs <- df_FND %>%
+  filter(!diagnosis %in% c(1, 4, 6, 7)) # those with diagnosis PNSES (44.5), sensory FND (44.6), PPPD or cognitive FND only are excluded 
+GMD_309_SFMDRS <- cor.test(df_sfmdrs$GMD_HEART_310, df_sfmdrs$sfmdrs, method = "pearson")
+GMD_309_SFMDRS 
+GMD_309_CGI <- cor.test(df_FND$GMD_HEART_310, df_FND$cgi, method = "pearson") 
+GMD_309_CGI
+GMD_309_SDQ <- cor.test(df_FND$GMD_HEART_310, df_FND$sdq, method = "pearson") 
+GMD_309_SDQ 
+GMD_309_pos <- cor.test(df_FND$GMD_HEART_310, df_FND$sum_positive_signs, method = "pearson") 
+GMD_309_pos 
+
+# Extract p-values
+p_values <- c(GMD_309_SFMDRS$p.value, GMD_309_CGI$p.value, 
+              GMD_309_SDQ$p.value, GMD_309_pos$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+GMD_510_SFMDRS <- cor.test(df_sfmdrs$GMD_HEART_510, df_sfmdrs$sfmdrs, method = "pearson") 
+GMD_510_SFMDRS 
+GMD_510_CGI <- cor.test(df_FND$GMD_HEART_510, df_FND$cgi, method = "pearson") 
+GMD_510_CGI
+GMD_510_SDQ <- cor.test(df_FND$GMD_HEART_510, df_FND$sdq, method = "pearson") 
+GMD_510_SDQ # p = 0.000239
+GMD_510_pos <- cor.test(df_FND$GMD_HEART_510, df_FND$sum_positive_signs, method = "pearson") 
+GMD_510_pos 
+
+# Extract p-values
+p_values <- c(GMD_510_SFMDRS$p.value, GMD_510_CGI$p.value, 
+              GMD_510_SDQ$p.value, GMD_510_pos$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr # 510-SDQ still 0.00095
+
+
+# SDQ 
+lm <- lm(formula = sdq ~ GMD_HEART_510 + sex + age,data = df_FND) 
+summary(lm) # GMD_HEART_510
+
+## control for covariates of affective sympotms and medication intake
+lm <- lm(formula = sdq ~ GMD_HEART_510 + anx_dep_SUM + medication_brain,
+          data = df_FND) 
+summary(lm) # GMD_HEART_510
+
+
+# Visulization of GMD_HEART_510 and SDQ 
+GMD_HEART_510_sdq<- ggplot(df, aes(x = sdq, y = GMD_HEART_510, color = as.factor(group))) +
+  geom_point() + 
+  geom_smooth(method = "lm", se = TRUE) +  
+  labs(x = "Somatoform Dissociation Questionnaire (SDQ-20)", 
+       y = "GMD at 510-524ms post R peak during Focusing on the Heart", 
+       title = "EEG marker for cardiovascular interoception and dissociation scores",
+       color = "Group") +
+ theme_minimal() +
+  theme(panel.grid = element_blank()) +  # Remove gridlines
+  scale_color_manual(values = c("FND" = "#E95248", "HC" = "#868686FF"))
+GMD_HEART_510_sdq
+
+	pdf("5.2_Plot_GMD_heart510_sdq.pdf")
+	GMD_HEART_510_sdq
+	dev.off()
+
+df$GFP_SOUND_285
+GFP_HEART_285_SFMDRS <- cor.test(df_sfmdrs$GFP_HEART_285, df_sfmdrs$sfmdrs, method = "pearson") 
+GFP_HEART_285_SFMDRS 
+GFP_HEART_285_CGI <- cor.test(df_FND$GFP_HEART_285, df_FND$cgi, method = "pearson") 
+GFP_HEART_285_CGI
+GFP_HEART_285_SDQ <- cor.test(df_FND$GFP_HEART_285, df_FND$sdq, method = "pearson") 
+GFP_HEART_285_SDQ 
+GFP_HEART_285_pos <- cor.test(df_FND$GFP_HEART_285, df_FND$sum_positive_signs, method = "pearson") 
+GFP_HEART_285_pos 
+
+# Extract p-values
+p_values <- c(GFP_HEART_285_SFMDRS$p.value, GFP_HEART_285_CGI$p.value, 
+              GFP_HEART_285_SDQ$p.value, GFP_HEART_285_pos$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+F1_HEART_185_SFMDRS <- cor.test(df_sfmdrs$F1_HEART_185, df_sfmdrs$sfmdrs, method = "pearson") 
+F1_HEART_185_SFMDRS 
+F1_HEART_185_CGI <- cor.test(df_FND$F1_HEART_185, df_FND$cgi, method = "pearson") 
+F1_HEART_185_CGI
+F1_HEART_185_SDQ <- cor.test(df_FND$F1_HEART_185, df_FND$sdq, method = "pearson") 
+F1_HEART_185_SDQ 
+F1_HEART_185_pos <- cor.test(df_FND$F1_HEART_185, df_FND$sum_positive_signs, method = "pearson") 
+F1_HEART_185_pos 
+
+# Extract p-values
+p_values <- c(F1_HEART_185_SFMDRS$p.value, F1_HEART_185_CGI$p.value, 
+              F1_HEART_185_SDQ$p.value, F1_HEART_185_pos$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+```
+
+Visualization GFP plot
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# Reshape to long format
+df_gfp_plot <- df %>%
+  select(pcode, group, GFP_HEART_285, GFP_SOUND_285) %>%
+  pivot_longer(cols = c(GFP_HEART_285, GFP_SOUND_285),
+               names_to = "Condition",
+               values_to = "Value")
+df_gfp_plot <- df_gfp_plot %>%
+  mutate(group = factor(group, levels = c(0, 1), labels = c("HC", "FND")))
+
+# Calulate mean and se
+summary_df <- df_gfp_plot %>%
+  group_by(group, Condition) %>%
+  dplyr::summarise(
+    mean = mean(Value, na.rm = TRUE),
+    se = sd(Value, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop")
+
+# group colors
+group_colors <- c("FND" = "#E95248", "HC" = "#868686FF")
+
+# Relabel conditions for x-axis
+summary_df <- summary_df %>%
+  mutate(Condition = case_when(
+    Condition == "GFP_HEART_285" ~ "focusing on HEART",
+    Condition == "GFP_SOUND_285" ~ "focusing on SOUND",
+    TRUE ~ as.character(Condition)))
+
+#  bar plot with SE error bars
+ggplot(summary_df, aes(x = Condition, y = mean, fill = group)) +
+  geom_bar(stat = "identity", position = position_dodge(0.9), width = 0.7) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se),
+                position = position_dodge(0.9), width = 0.2) +
+  scale_fill_manual(values = group_colors) +
+  expand_limits(y = 0.5) +  # Soft lower limit, won't cut off bars
+  labs(y = "Mean GFP", x = NULL, fill = "Group") +
+  theme_minimal() +
+  theme( panel.grid = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12),
+    legend.position = "right")
+
+```
+
+## 5.3 Correlation of interoceptive EEG markers and other interoceptive variables
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# correlation  between neuronal markers and interoceptive scores
+df_exclusion <- df[df$pcode != "63", ] # outlier in RRST
+
+GMD_309_IAS <- cor.test(df$GMD_HEART_310, df$ias, method = "pearson") 
+GMD_309_IAS 
+GMD_309_MAIA <- cor.test(df$GMD_HEART_310, df$maia_total, method = "pearson") 
+GMD_309_MAIA
+GMD_309_rrst <- cor.test(df_exclusion$GMD_HEART_310, df_exclusion$rrst_sensitivity, method = "pearson") 
+GMD_309_rrst
+GMD_309_hbt<- cor.test(df$GMD_HEART_310, df$hbt_accuracy_mean, method = "pearson") 
+GMD_309_hbt 
+
+# Extract p-values
+p_values <- c(GMD_309_IAS$p.value, GMD_309_MAIA$p.value, 
+              GMD_309_rrst$p.value, GMD_309_hbt$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+GMD_510_IAS <- cor.test(df$GMD_HEART_510, df$ias, method = "pearson") 
+GMD_510_IAS # 0.05882
+GMD_510_MAIA <- cor.test(df$GMD_HEART_510, df$maia_total, method = "pearson") 
+GMD_510_MAIA
+GMD_510_rrst <- cor.test(df_exclusion$GMD_HEART_510, df_exclusion$rrst_sensitivity, method = "pearson") 
+GMD_510_rrst # r = -0.28, p-value = 0.008867
+GMD_510_hbt<- cor.test(df$GMD_HEART_510, df$hbt_accuracy_mean, method = "pearson") 
+GMD_510_hbt # p-value = 0.01715; r = -0.25 GFP 289 and HBT accuracy mean
+
+# Extract p-values
+p_values <- c(GMD_510_IAS$p.value, GMD_510_MAIA$p.value, 
+              GMD_510_rrst$p.value, GMD_510_hbt$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr # RRST stil p = 0.034, HBT still p = 0.034
+
+# GMD_HEART_510_sdq
+GMD_HEART_510_rrst<- ggplot(df_exclusion, aes(x = rrst_sensitivity, y = GMD_HEART_510, color = as.factor(group))) +
+  geom_point() +  
+  geom_smooth(method = "lm", se = TRUE) +  # Add regression lines and SE
+  labs(x = "RRST sensitivity score", 
+       y = "GMD at 510-524ms post R peak during Focusing on the Heart", 
+       title = "EEG marker for cardiovascular interoception and other interoceptive scores",
+       color = "Group") +  
+ theme_minimal() +
+  theme(panel.grid = element_blank()) +  # Remove gridlines
+  scale_color_manual(values = c("1" = "#E95248", "0" = "#868686FF"))
+GMD_HEART_510_rrst
+
+	pdf("5.3_Plot_GMD_heart510_rrst.pdf")
+	GMD_HEART_510_rrst
+	dev.off()
+	
+# GMD_HEART_510_sdq
+GMD_HEART_510_hbt<- ggplot(df, aes(x = hbt_accuracy_mean, y = GMD_HEART_510, color = as.factor(group))) +
+  geom_point() +  
+  geom_smooth(method = "lm", se = TRUE) +  
+  labs(x = "Cardiovascular Interoceptive Accuracy (HBT)", 
+       y = "GMD at 510-524ms post R peak during Focusing on the Heart", 
+       title = "EEG marker for cardiovascular interoception and other interoceptive scores",
+       color = "Group") +  # Label for the legend
+ theme_minimal() +
+  theme(panel.grid = element_blank()) +  # Remove gridlines
+  scale_color_manual(values = c("FND" = "#E95248", "HC" = "#868686FF"))
+GMD_HEART_510_hbt
+
+	pdf("5.3_Plot_GMD_heart510_hbt.pdf")
+	GMD_HEART_510_hbt
+	dev.off()
+
+GFP_285_IAS <- cor.test(df$GFP_HEART_285, df$ias, method = "pearson") 
+GFP_285_IAS 
+GFP_285_MAIA <- cor.test(df$GFP_HEART_285, df$maia_total, method = "pearson") 
+GFP_285_MAIA
+GFP_285_rrst <- cor.test(df_exclusion$GFP_HEART_285, df_exclusion$rrst_sensitivity, method = "pearson") 
+GFP_285_rrst
+GFP_285_hbt<- cor.test(df$GFP_HEART_285, df$hbt_accuracy_mean, method = "pearson") 
+GFP_285_hbt
+
+# Extract p-values
+p_values <- c(GFP_285_IAS$p.value, GFP_285_MAIA$p.value, 
+              GFP_285_rrst$p.value, GFP_285_hbt$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+F1_185_IAS <- cor.test(df$F1_HEART_185, df$ias, method = "pearson") 
+F1_185_IAS #p-value = 0.04296, r = 0.2162987 
+F1_185_MAIA <- cor.test(df$F1_HEART_185, df$maia_total, method = "pearson") 
+F1_185_MAIA # p-value = 0.08494
+F1_185_rrst <- cor.test(df$F1_HEART_185, df$rrst_sensitivity, method = "pearson") 
+F1_185_rrst
+F1_185_hbt<- cor.test(df$F1_HEART_185, df$hbt_accuracy_mean, method = "pearson") 
+F1_185_hbt
+
+# Extract p-values
+p_values <- c(F1_185_IAS$p.value, F1_185_MAIA$p.value, 
+              F1_185_rrst$p.value, F1_185_hbt$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr # not sig anymore
+
+
+# visualization
+F1_185_IAS<- ggplot(df, aes(x = ias, y = F1_HEART_185, color = as.factor(group))) +
+  geom_point() +  
+  geom_smooth(method = "lm", se = TRUE) + 
+  labs(x = "Interoceptive Accuracy Scale (IAS)", 
+       y = "F1 at 185-210ms post R peak during Focusing on the Heart", 
+       title = "EEG marker for cardiovascular interoception and interoceptive sensibility",
+       color = "Group") + 
+ theme_minimal() +
+  theme(panel.grid = element_blank()) +  # Remove gridlines
+  scale_color_manual(values = c("FND" = "#E95248", "HC" = "#868686FF"))
+F1_185_IAS
+
+	pdf("5.3_Plot_F1_185_IAS.pdf")
+	F1_185_IAS
+	dev.off()
+```
+
+# 6) HEP : targeted approach
+
+For the targeted approach, the three electrodes Fz, F8 and F7 were chosen based on previous FND literature for the time interval of 250-595ms after Rpeak. Trace differences were tested in Cartool. Here, we extracted the trace amplitudes in order to run interaction and correlation analysis.
+
+## 6.1 Full time interval for F7, F8, Fz; 250-595ms
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+## LOAD  EEG DATA  -----------------------------------------------------------
+# load prepared and cleaned file with averaged electrodes (separate per group and condition for the selected electrodes; F7, F8 and Fz but also the control electrodes)
+df_EEG_FND <- read.xlsx("/Users/nataschastoffel/Documents/GitHub/interoception_NS/data/processed/02-2025/AverageTimeInterval_717-1423tf_FND_electrodes_250-595ms.xlsx")
+df_EEG_HC <- read.xlsx("/Users/nataschastoffel/Documents/GitHub/interoception_NS/data/processed/02-2025/AverageTimeInterval_717-1423tf_HC_electrodes_250-595ms.xlsx")
+
+df_EEG_FND$pcode <- substr(df_EEG_FND$pcode, 1, 4) # keeps only the first four digits (P001 etc) in the names
+df_EEG_FND$pcode <- sub("^P00", "", df_EEG_FND$pcode) # gets rid of the P00 for all participants
+df_EEG_FND$pcode <- sub("^P0", "", df_EEG_FND$pcode) # gets rid of the P0 for all participants
+df_EEG_FND$pcode <- sub("^P", "", df_EEG_FND$pcode) # gets rid of the P for all participants
+
+df_EEG_HC$pcode <- substr(df_EEG_HC$pcode, 1, 4) # keeps only the first four digits (P001 etc) in the names
+df_EEG_HC$pcode <- sub("^P00", "", df_EEG_HC$pcode) # gets rid of the P00 for all participants
+df_EEG_HC$pcode <- sub("^P0", "", df_EEG_HC$pcode) # gets rid of the P0 for all participants
+df_EEG_HC$pcode <- sub("^P", "", df_EEG_HC$pcode) # gets rid of the P for all participants
+
+
+# Add GROUP variable and merge datasets so we can afterwards do a long format
+df_EEG_FND <- df_EEG_FND %>% mutate(GROUP = "FND")
+df_EEG_HC <- df_EEG_HC %>% mutate(GROUP = "HC")
+
+df_EEG<-merge(df_EEG_HC, df_EEG_FND, x.by=c("pcode"),y.by=c("pcode"),all.x=TRUE, all.y=TRUE) 
+
+# Convert from wide to long format
+df_long <- df_EEG %>%
+  pivot_longer(cols = c(Fp1_HEART,	F3_HEART,	F7_HEART,	C3_HEART,	Fpz_HEART,	Fp2_HEART,	Fz_HEART,	F4_HEART,	F8_HEART,	Cz_HEART,	C4_HEART,	Fp1_SOUND,	F3_SOUND,	F7_SOUND,	C3_SOUND,	Fpz_SOUND,	Fp2_SOUND,	Fz_SOUND,	F4_SOUND,	F8_SOUND,	Cz_SOUND,	C4_SOUND),
+               names_to = c("Electrode", "CONDITION"),
+               names_pattern = "(F7|Fz|F8|Fp1|F3|C3|Fpz|Fp2|F4|Cz|C4)_(SOUND|HEART)",
+               values_to = "EEG_Value") %>%
+  mutate(GROUP = factor(GROUP),
+         CONDITION = factor(CONDITION),
+         Electrode = factor(Electrode),
+         pcode = factor(pcode))  # Ensure participant is a factor
+
+## merge with ECG data (to control for its effect in the ANOVA)
+df_ECG <- df %>%
+  select(pcode, sex, age, mean_RR_interval_hep, rmssd_hep, ecg_amp_250full_norm, medication_brain, anx_dep_SUM) %>%
+  mutate(pcode = as.factor(pcode))  # Convert pcode to factor
+
+df_long <- df_long %>%
+  left_join(df_ECG %>% select(pcode, sex, age, rmssd_hep, mean_RR_interval_hep, ecg_amp_250full_norm, medication_brain, anx_dep_SUM), by = "pcode")
+
+
+# Run repeated measures ANOVA for each electrode separately 
+# aov for ANOVA with repeated measures, with the Error () term modeling within-subject variances
+
+# Run ANOVA for F7
+df_F7 <- df_long %>% filter(Electrode == "F7")
+# FIRST Test normality by group and condition
+df_F7  %>% group_by(GROUP, CONDITION) %>%  
+  shapiro_test(EEG_Value) # normality violated
+# THEN, test homogenity of variance using Levene's test
+car::leveneTest(EEG_Value ~ GROUP * CONDITION, data = df_F7) # homogenity assumption met
+### SUMMARY of assumption test: CAREFUL in interpretation  as non-normal distribution
+
+
+# now run ANOVA for F7
+model_F7 <- aov(EEG_Value ~ GROUP * CONDITION + Error(pcode / CONDITION), data = df_F7)
+summary(model_F7)
+# no sig effect of condition or group*condition interaction
+
+model_F7 <- aov(EEG_Value ~ GROUP * CONDITION + sex + age + Error(pcode / CONDITION), data = df_F7)
+summary(model_F7)
+# no sig effect of condition or group*condition interaction
+
+df_F7 <- df_F7 %>% drop_na(rmssd_hep, mean_RR_interval_hep)
+model_F7_ECG <- aov(EEG_Value ~ GROUP * CONDITION +  rmssd_hep + mean_RR_interval_hep + Error(pcode / CONDITION), data = df_F7)
+summary(model_F7_ECG)
+# no sig effect of group, HRV or HR; also no sig effect of condition or group*condition interaction
+model_F7_ECG <- aov(EEG_Value ~ GROUP * CONDITION +  ecg_amp_250full_norm
+                    + Error(pcode / CONDITION), data = df_F7)
+summary(model_F7_ECG)
+
+
+# Run ANOVA for Fz
+df_Fz <- df_long %>% filter(Electrode == "Fz")
+# FIRST Test normality by group and condition
+df_Fz  %>% group_by(GROUP, CONDITION) %>%  
+  shapiro_test(EEG_Value) # FND sound condition not normally distributed
+# THEN, test homogenity of variance using Levene's test
+car::leveneTest(EEG_Value ~ GROUP * CONDITION, data = df_Fz) # homogenity assumption met
+#SUMMARY of assumption test: only one condition not normally distributed (--> caution!) but proceeding with ANOVA
+
+# Now, run ANOVA
+model_Fz <- aov(EEG_Value ~ GROUP * CONDITION + Error(pcode / CONDITION), data = df_Fz)
+summary(model_Fz)
+# no sig effect of condition or group*condition interaction
+
+model_Fz <- aov(EEG_Value ~ GROUP * CONDITION + sex + age + Error(pcode / CONDITION), data = df_Fz)
+summary(model_Fz)
+
+model_Fz_ECG <- aov(EEG_Value ~ GROUP * CONDITION + rmssd_hep + mean_RR_interval_hep + Error(pcode / CONDITION), data = df_Fz)
+summary(model_Fz_ECG)
+# no sig effect of group, HRV or HR (trend for HRV); also no sig effect of condition or group*condition interaction
+model_Fz_ECG <- aov(EEG_Value ~ GROUP * CONDITION + ecg_amp_250full_norm
+                    + Error(pcode / CONDITION), data = df_Fz)
+summary(model_Fz_ECG)
+
+
+# Run ANOVA for F8 
+df_F8 <- df_long %>% filter(Electrode == "F8")
+# FIRST Test normality by group and condition
+df_F8  %>% group_by(GROUP, CONDITION) %>%  
+  shapiro_test(EEG_Value)# non-normality for FND SOUND and HC HEART (p < 0.05)
+# THEN, test homogenity of variance using Levene's test
+car::leveneTest(EEG_Value ~ GROUP * CONDITION, data = df_F8) # p = 0.945 indicates equal vairance across groups; the homogeneity assumption is satisfied
+## SUMMARY of assumptions testing: Since ANOVA is robust to mild non-normality and groups N > 20 per group, and you have equal variances, we  proceed with ANOVA
+
+# Now, run ANOVA
+model_F8 <- aov(EEG_Value ~ GROUP * CONDITION + Error(pcode / CONDITION), data = df_F8)
+summary(model_F8)
+#  sig effect of condition but no sig group*condition interaction
+
+model_F8_cov <- aov(EEG_Value ~ GROUP * CONDITION + sex + age + Error(pcode / CONDITION), data = df_F8)
+summary(model_F8_cov) # group effect remains
+
+model_F8_ecg <- aov(EEG_Value ~ GROUP * CONDITION + rmssd_hep + mean_RR_interval_hep + Error(pcode / CONDITION), data = df_F8)
+summary(model_F8_ecg)
+
+model_F8_psych <- aov(EEG_Value ~ GROUP * CONDITION + medication_brain + anx_dep_SUM + Error(pcode / CONDITION), data = df_F8)
+summary(model_F8_psych)
+
+model_F8_full<- aov(EEG_Value ~ GROUP * CONDITION + sex + age + rmssd_hep + mean_RR_interval_hep + medication_brain + anx_dep_SUM + Error(pcode / CONDITION), data = df_F8)
+summary(model_F8_full) ### MAIN EFFECT group survives also in FULL model (including all variables in one model); p = 0.023
+
+model_F8_ECG <- aov(EEG_Value ~ GROUP * CONDITION + ecg_amp_250full_norm  + Error(pcode / CONDITION), data = df_F8)
+summary(model_F8_ECG)
+
+
+###### running non-normality robust ARTool (instead of ANOVA)
+# ART model
+art_model_f8 <- ARTool::art(EEG_Value ~ GROUP * CONDITION + (1 | pcode), data = df_F8)
+anova(art_model_f8) # main effect of group : F(1, 86) = 5.62, p = 0.020
+### problem: not possible to include covariates, so only main group*condition effects are tested
+```
+
+## 6.2 Control Analysis: 2x3x2 analysis
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# REGION 0 (our target electrodes; F7, Fz, F8)
+df_region0 <- df_long %>% dplyr::filter(Electrode %in% c("F7", "Fz", "F8"))
+
+# FIRST Test normality by group and condition
+df_region0  %>% group_by(GROUP, CONDITION) %>%  
+  shapiro_test(EEG_Value) # p< 0.005; normality violated
+# THEN, test homogenity of variance using Levene's test
+car::leveneTest(EEG_Value ~ GROUP * CONDITION, data = df_region0) # homogenity assumption met (p>0.005)
+### SUMMARY of assumption test: CAREFUL in interpretation  as it is non-normal distribution
+
+# Now repeated-measures ANOVA (mixed design) with Error term: subject nested within the within-subject factors REGION and CONDITION
+model_mixed <- aov(
+  EEG_Value ~ GROUP * Electrode * CONDITION + Error(pcode / (Electrode * CONDITION)),
+  data = df_region0)
+summary(model_mixed)
+#### significant main effect of GROUP and sig main effect of electrode (which is not suprirsing). However, there is not interaction of group and electrode, indicating similar electrode pattern across group, as well as similar condition effect accros group (no group X condition interaction)
+
+###### running non-normality robust ARTool (instead of ANOVA)
+# ART model
+art_model_region0 <- ARTool::art(EEG_Value ~ GROUP * CONDITION * Electrode + Error(pcode / (Electrode * CONDITION)), data = df_region0)
+anova(art_model_region0) 
+## main effect of group and electorde remain (no interactions still)
+
+# REGION 1 (Fp1, Fpz, Fp2)
+df_region1 <- df_long %>% dplyr::filter(Electrode %in% c("Fp1", "Fz", "Fp2"))
+
+# FIRST Test normality by group and condition
+df_region1  %>% group_by(GROUP, CONDITION) %>%  
+  shapiro_test(EEG_Value) # p< 0.005; normality violated
+# THEN, test homogenity of variance using Levene's test
+car::leveneTest(EEG_Value ~ GROUP * CONDITION, data = df_region1) # homogenity assumption met (p>0.005)
+### SUMMARY of assumption test: CAREFUL in interpretation  as it is non-normal distribution
+
+# Now repeated-measures ANOVA (mixed design) with Error term: subject nested within the within-subject factors REGION and CONDITION
+model_mixed <- aov(
+  EEG_Value ~ GROUP * Electrode * CONDITION + Error(pcode / (Electrode * CONDITION)),
+  data = df_region1)
+summary(model_mixed)
+#### significant main effect of electrode (non surprising; meaning EEG value varies across electrode site) but NOTHING (neither main nor interaction effect) with group
+
+###### running non-normality robust ARTool (instead of ANOVA)
+# ART model
+art_model_region1 <- ARTool::art(EEG_Value ~ GROUP * CONDITION * Electrode + Error(pcode / (Electrode * CONDITION)), data = df_region1)
+anova(art_model_region1) 
+## still only main effect of electrode
+
+
+# REGION 2 (F3, Fz, F4)
+df_region2 <- df_long %>% dplyr::filter(Electrode %in% c("F3", "Fz", "F4"))
+
+# FIRST Test normality by group and condition
+df_region2  %>% group_by(GROUP, CONDITION) %>%  
+  shapiro_test(EEG_Value) # p< 0.005; normality violated
+# THEN, test homogenity of variance using Levene's test
+car::leveneTest(EEG_Value ~ GROUP * CONDITION, data = df_region2) # homogenity assumption met (p>0.005)
+### SUMMARY of assumption test: CAREFUL in interpretation  as it is non-normal distribution
+
+# Now repeated-measures ANOVA (mixed design) with Error term: subject nested within the within-subject factors REGION and CONDITION
+model_mixed <- aov(
+  EEG_Value ~ GROUP * Electrode * CONDITION + Error(pcode / (Electrode * CONDITION)),
+  data = df_region2)
+summary(model_mixed)
+#### again only sig effect of electrode, and no interaction with neither group nor condition
+
+###### running non-normality robust ARTool (instead of ANOVA)
+# ART model
+art_model_region2 <- ARTool::art(EEG_Value ~ GROUP * CONDITION * Electrode + Error(pcode / (Electrode * CONDITION)), data = df_region2)
+anova(art_model_region2) 
+## now we also have a sig main effect of GROUP, and still electrode, however no interaction still
+
+
+# REGION 3 (C3, Cz, C4)
+df_region3 <- df_long %>% dplyr::filter(Electrode %in% c("C3", "Cz", "C4"))
+
+# FIRST Test normality by group and condition
+df_region3  %>% group_by(GROUP, CONDITION) %>%  
+  shapiro_test(EEG_Value) # p< 0.005; normality violated
+# THEN, test homogenity of variance using Levene's test
+car::leveneTest(EEG_Value ~ GROUP * CONDITION, data = df_region3) # homogenity assumption met (p>0.005)
+### SUMMARY of assumption test: CAREFUL in interpretation  as it is non-normal distribution
+
+# Now repeated-measures ANOVA (mixed design) with Error term: subject nested within the within-subject factors REGION and CONDITION
+model_mixed <- aov(
+  EEG_Value ~ GROUP * Electrode * CONDITION + Error(pcode / (Electrode * CONDITION)),
+  data = df_region3)
+summary(model_mixed)
+#### Here we have a significant interaction between GROUP and CONDITION indicating that the EEG values differs between group, dependent on condition
+
+### post-hoc test for this sig interaction:
+library(emmeans)
+emm <- emmeans(model_mixed, ~ GROUP * CONDITION)
+pairs(emm, simple = "each")  # Only the FND group shows a significant condition effect: their EEG_Value is lower in the HEART condition than in SOUND (negative estimate). The HC group shows no change between conditions.
+## Thus interaction driven by FND group differences
+
+###### running non-normality robust ARTool (instead of ANOVA)
+# ART model
+art_model_region3 <- ARTool::art(EEG_Value ~ GROUP * CONDITION * Electrode + Error(pcode / (Electrode * CONDITION)), data = df_region3)
+anova(art_model_region3) 
+## only electrode as main effect, while conditionXgroup interaction now is only a trend p = 0.060
+```
+
+## 6.3 F8 separate per condition
+
+Now, here we work with those time intervals that were sig in one condition only (as a specific group effect), testing whether the effect remains after control for demographics
+
+-   536-547ms for HEART
+
+-   570-581ms for HEART
+
+-   451-462ms for SOUND
+
+-   515-591ms for SOUND
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+## Listing pvalues of the identified group difference
+# For trace F8 of focusing on the heart tiem interval 536-547
+lm <- lm(formula = F8_HEART_536 ~ group,
+          data = df) 
+summary(lm) 
+
+# For trace F8 of focusing on the heart tiem interval 570-581
+lm <- lm(formula = F8_HEART_570 ~ group,
+          data = df) 
+summary(lm) 
+
+# For trace F8 of focusing on the sound time interval 451-462
+lm <- lm(formula = F8_SOUND_451 ~ group,
+          data = df) 
+summary(lm) 
+
+# For trace F8 of focusing on the sound time interval 515-591
+lm <- lm(formula = F8_SOUND_515 ~ group,
+          data = df) 
+summary(lm) 
+
+
+# List to store p-values for the control analysis, and applying FDR correction
+group_pvals <- c()
+labels <- c()
+
+# Define all formulas
+formulas <- list(
+  F8_HEART_536 ~ group + sex + age,
+  F8_HEART_536 ~ group + rmssd_hep + mean_RR_interval_hep,
+  F8_HEART_536 ~ group + medication_brain + anx_dep_SUM,
+  
+  F8_HEART_570 ~ group + sex + age,
+  F8_HEART_570 ~ group + rmssd_hep + mean_RR_interval_hep,
+  F8_HEART_570 ~ group + medication_brain + anx_dep_SUM,
+  
+  F8_SOUND_451 ~ group + sex + age,
+  F8_SOUND_451 ~ group + rmssd_hep + mean_RR_interval_hep,
+  F8_SOUND_451 ~ group + medication_brain + anx_dep_SUM,
+  
+  F8_SOUND_515 ~ group + sex + age,
+  F8_SOUND_515 ~ group + rmssd_hep + mean_RR_interval_hep,
+  F8_SOUND_515 ~ group + medication_brain + anx_dep_SUM)
+
+# Run each model, extract group p-value
+for (i in seq_along(formulas)) {
+  model <- lm(formulas[[i]], data = df)
+  smry <- summary(model)
+  
+  # Extract group coefficient p-value
+  group_p <- coef(smry)["group1", "Pr(>|t|)"]
+  group_pvals <- c(group_pvals, group_p)
+  
+  # Save label for identification
+  labels <- c(labels, paste0("Model ", i, ": ", deparse(formulas[[i]])))}
+
+# Apply FDR correction
+fdr_pvals <- p.adjust(group_pvals, method = "fdr")
+
+# Print results
+for (i in seq_along(group_pvals)) {
+  cat(labels[i], "\n")
+  cat("  Uncorrected p:", sprintf("%.4f", group_pvals[i]),
+      "| FDR-corrected p:", sprintf("%.4f", fdr_pvals[i]), "\n\n")}
+
+```
+
+## 6.4 Predicting Symptom Severity with EEG markers activity: FND only
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+
+### HEART 537ms
+F8_HEART_536_SFMDRS <- cor.test(df_sfmdrs$F8_HEART_536, df_sfmdrs$sfmdrs, method = "pearson")
+F8_HEART_536_SFMDRS 
+F8_HEART_536_CGI <- cor.test(df_FND$F8_HEART_536, df_FND$cgi, method = "pearson") 
+F8_HEART_536_CGI
+F8_HEART_536_SDQ <- cor.test(df_FND$F8_HEART_536, df_FND$sdq, method = "pearson") 
+F8_HEART_536_SDQ 
+F8_HEART_536_pos <- cor.test(df_FND$F8_HEART_536, df_FND$sum_positive_signs, method = "pearson") 
+F8_HEART_536_pos 
+
+# Extract p-values
+p_values <- c(F8_HEART_536_SFMDRS$p.value, F8_HEART_536_CGI$p.value, 
+              F8_HEART_536_SDQ$p.value, F8_HEART_536_pos$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+### HEART 570ms
+F8_HEART_570_SFMDRS <- cor.test(df_sfmdrs$F8_HEART_570, df_sfmdrs$sfmdrs, method = "pearson")
+F8_HEART_570_SFMDRS 
+F8_HEART_570_CGI <- cor.test(df_FND$F8_HEART_570, df_FND$cgi, method = "pearson") 
+F8_HEART_570_CGI
+F8_HEART_570_SDQ <- cor.test(df_FND$F8_HEART_570, df_FND$sdq, method = "pearson") 
+F8_HEART_570_SDQ 
+F8_HEART_570_pos <- cor.test(df_FND$F8_HEART_570, df_FND$sum_positive_signs, method = "pearson") 
+F8_HEART_570_pos 
+
+# Extract p-values
+p_values <- c(F8_HEART_570_SFMDRS$p.value, F8_HEART_570_CGI$p.value, 
+              F8_HEART_570_SDQ$p.value, F8_HEART_570_pos$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+
+### F8_SOUND_451
+F8_SOUND_451_SFMDRS <- cor.test(df_sfmdrs$F8_SOUND_451, df_sfmdrs$sfmdrs, method = "pearson")
+F8_SOUND_451_SFMDRS 
+F8_SOUND_451_CGI <- cor.test(df_FND$F8_SOUND_451, df_FND$cgi, method = "pearson") 
+F8_SOUND_451_CGI
+F8_SOUND_451_SDQ <- cor.test(df_FND$F8_SOUND_451, df_FND$sdq, method = "pearson") 
+F8_SOUND_451_SDQ 
+F8_SOUND_451_pos <- cor.test(df_FND$F8_SOUND_451, df_FND$sum_positive_signs, method = "pearson") 
+F8_SOUND_451_pos 
+
+# Extract p-values
+p_values <- c(F8_SOUND_451_SFMDRS$p.value, F8_SOUND_451_CGI$p.value, 
+              F8_SOUND_451_SDQ$p.value, F8_SOUND_451_pos$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+
+###  F8_SOUND_515
+F8_SOUND_515_SFMDRS <- cor.test(df_sfmdrs$F8_SOUND_515, df_sfmdrs$sfmdrs, method = "pearson")
+F8_SOUND_515_SFMDRS 
+F8_SOUND_515_CGI <- cor.test(df_FND$F8_SOUND_515, df_FND$cgi, method = "pearson") 
+F8_SOUND_515_CGI
+F8_SOUND_515_SDQ <- cor.test(df_FND$F8_SOUND_515, df_FND$sdq, method = "pearson") 
+F8_SOUND_515_SDQ 
+F8_SOUND_515_pos <- cor.test(df_FND$F8_SOUND_515, df_FND$sum_positive_signs, method = "pearson") 
+F8_SOUND_515_pos 
+
+# Extract p-values
+p_values <- c(F8_SOUND_515_SFMDRS$p.value, F8_SOUND_515_CGI$p.value, 
+              F8_SOUND_515_SDQ$p.value, F8_SOUND_515_pos$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+```
+
+## 6.5 Correlation of F8 and other Interoceptive measures
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# Step 1: Reshape df_f8 from long to wide
+df_exclusion <- df[df$pcode != "63", ] # outlier in RRST
+
+### HEART 536ms
+F8_HEART_536_ias <- cor.test(df$F8_HEART_536, df$ias, method = "pearson")
+F8_HEART_536_ias 
+F8_HEART_536_maia <- cor.test(df$F8_HEART_536, df$maia_total, method = "pearson") 
+F8_HEART_536_maia
+F8_HEART_536_rrst <- cor.test(df_exclusion$F8_HEART_536, df_exclusion$rrst_sensitivity, method = "pearson") 
+F8_HEART_536_rrst 
+F8_HEART_536_hbt <- cor.test(df$F8_HEART_536, df$hbt_accuracy_mean, method = "pearson") 
+F8_HEART_536_hbt
+
+# Extract p-values
+p_values <- c(F8_HEART_536_ias$p.value, F8_HEART_536_maia$p.value, 
+              F8_HEART_536_rrst$p.value, F8_HEART_536_hbt$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+### HEART 570ms
+F8_HEART_570_ias <- cor.test(df$F8_HEART_570, df$ias, method = "pearson")
+F8_HEART_570_ias 
+F8_HEART_570_maia <- cor.test(df$F8_HEART_570, df$maia_total, method = "pearson") 
+F8_HEART_570_maia
+F8_HEART_570_rrst <- cor.test(df_exclusion$F8_HEART_570, df_exclusion$rrst_sensitivity, method = "pearson") 
+F8_HEART_570_rrst 
+F8_HEART_570_hbt <- cor.test(df$F8_HEART_570, df$hbt_accuracy_mean, method = "pearson") 
+F8_HEART_570_hbt
+
+# Extract p-values
+p_values <- c(F8_HEART_570_ias$p.value, F8_HEART_570_maia$p.value, 
+              F8_HEART_570_rrst$p.value, F8_HEART_570_hbt$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+
+### F8_SOUND_451
+F8_SOUND_451_ias <- cor.test(df$F8_SOUND_451, df$ias, method = "pearson")
+F8_SOUND_451_ias 
+F8_SOUND_451_maia <- cor.test(df$F8_SOUND_451, df$maia_total, method = "pearson") 
+F8_SOUND_451_maia
+F8_SOUND_451_rrst <- cor.test(df_exclusion$F8_SOUND_451, df_exclusion$rrst_sensitivity, method = "pearson") 
+F8_SOUND_451_rrst 
+F8_SOUND_451_hbt <- cor.test(df$F8_SOUND_451, df$hbt_accuracy_mean, method = "pearson") 
+F8_SOUND_451_hbt
+
+# Extract p-values
+p_values <- c(F8_SOUND_451_ias$p.value, F8_SOUND_451_maia$p.value, 
+              F8_SOUND_451_rrst$p.value, F8_SOUND_451_hbt$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+
+###  F8_SOUND_515
+F8_SOUND_515_ias <- cor.test(df$F8_SOUND_515, df$ias, method = "pearson")
+F8_SOUND_515_ias 
+F8_SOUND_515_maia <- cor.test(df$F8_SOUND_515, df$maia_total, method = "pearson") 
+F8_SOUND_515_maia
+F8_SOUND_515_rrst <- cor.test(df_exclusion$F8_SOUND_515, df_exclusion$rrst_sensitivity, method = "pearson") 
+F8_SOUND_515_rrst 
+F8_SOUND_515_hbt <- cor.test(df$F8_SOUND_515, df$hbt_accuracy_mean, method = "pearson") 
+F8_SOUND_515_hbt
+
+# Extract p-values
+p_values <- c(F8_SOUND_515_ias$p.value, F8_SOUND_515_maia$p.value, 
+              F8_SOUND_515_rrst$p.value, F8_SOUND_515_hbt$p.value)
+# Apply FDR correction
+p_values_fdr <- p.adjust(p_values, method = "fdr")
+# Display corrected p-values
+p_values_fdr
+
+```
+
+# 7) Control analysis: ECG
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+shapiro.test(df$mean_RR_interval_hep) # normally distributed with  p > 0.05
+shapiro.test(df$rmssd_hep) #  NOT normally distributed with  p < 0.05
+
+t.test(df$mean_RR_interval_hep[df$group=="1"], df$mean_RR_interval_hep[df$group=="0"])
+t.test(df$rmssd_hep[df$group=="1"], df$rmssd_hep[df$group=="0"])
+
+cohens_d_RR <- calculate_cohens_d(df, "mean_RR_interval_hep", "group", 1, 0) # group 1=FND, group=0 HC
+cohens_d_RR
+cohens_d_RMSSD <- calculate_cohens_d(df, "rmssd_hep", "group", 1, 0) # group 1=FND, group=0 HC
+cohens_d_RMSSD
+
+
+## LOAD  more specific ECG DATA  -----------------------------------------------------------
+df_ECG <- read.xlsx("/Users/nataschastoffel/Documents/GitHub/interoception_NS/data/processed/02-2025/ECG_control_analysis.xlsx")
+
+df_ECG$pcode <- substr(df_ECG$pcode, 1, 4) # keeps only the first four digits (P001 etc) in the names
+df_ECG$pcode <- sub("^P00", "", df_ECG$pcode) # gets rid of the P00 for all participants
+df_ECG$pcode <- sub("^P0", "", df_ECG$pcode) # gets rid of the P0 for all participants
+df_ECG$pcode <- sub("^P", "", df_ECG$pcode) # gets rid of the P for all participants
+
+# Ensure 'group' is a factor
+df_ECG <- df_ECG %>%
+  mutate(group = as.factor(group))  # Convert 'group' to factor
+
+### SPECIFIC STATS per condition and group
+# Create an empty list to store results
+test_results <- list()
+
+# Perform t-tests and Wilcoxon tests, storing p-values
+test_results[["Mean_HEART (FND vs HC)"]] <- t.test(df_ECG$Mean_HEART[df_ECG$group=="FND"], df_ECG$Mean_HEART[df_ECG$group=="HC"])$p.value
+test_results[["Mean_SOUND (FND vs HC)"]] <- t.test(df_ECG$Mean_SOUND[df_ECG$group=="FND"], df_ECG$Mean_SOUND[df_ECG$group=="HC"])$p.value
+
+test_results[["RMSSD_HEART (FND vs HC)"]] <- wilcox.test(df_ECG$RMSSD_HEART[df_ECG$group=="FND"], df_ECG$RMSSD_HEART[df_ECG$group=="HC"])$p.value
+test_results[["RMSSD_SOUND (FND vs HC)"]] <- wilcox.test(df_ECG$RMSSD_SOUND[df_ECG$group=="FND"], df_ECG$RMSSD_SOUND[df_ECG$group=="HC"])$p.value
+
+test_results[["Mean_HEART vs Mean_SOUND (FND)"]] <- t.test(df_ECG$Mean_HEART[df_ECG$group=="FND"], df_ECG$Mean_SOUND[df_ECG$group=="FND"], paired=TRUE)$p.value
+test_results[["Mean_HEART vs Mean_SOUND (HC)"]] <- t.test(df_ECG$Mean_HEART[df_ECG$group=="HC"], df_ECG$Mean_SOUND[df_ECG$group=="HC"], paired=TRUE)$p.value
+
+test_results[["RMSSD_HEART vs RMSSD_SOUND (FND)"]] <- wilcox.test(df_ECG$RMSSD_HEART[df_ECG$group=="FND"], df_ECG$RMSSD_SOUND[df_ECG$group=="FND"], paired=TRUE)$p.value
+test_results[["RMSSD_HEART vs RMSSD_SOUND (HC)"]] <- wilcox.test(df_ECG$RMSSD_HEART[df_ECG$group=="HC"], df_ECG$RMSSD_SOUND[df_ECG$group=="HC"], paired=TRUE)$p.value
+
+# Convert list to dataframe
+p_values_df <- data.frame(
+  Comparison = names(test_results),
+  p_value = unlist(test_results))
+
+# Apply multiple comparison correction for heartrate and heartrate variability
+p_values_df$p_adj_fdr <- p.adjust(p_values_df$p_value, method = "fdr")
+
+# Print the results
+print(p_values_df)
+
+
+
+##### Testing interaction using reapeated measure ANOVA
+# Convert Factor of 'Condition' to long format
+df_long <- df_ECG %>%
+  pivot_longer(cols = c(Mean_HEART, Mean_SOUND, RMSSD_HEART, RMSSD_SOUND),
+               names_to = c(".value", "condition"), 
+               names_pattern = "(.*)_(HEART|SOUND)") %>%
+ mutate(
+    condition = factor(condition, levels = c("HEART", "SOUND")),  # Ensure condition is a factor
+    group = factor(group),  # Ensure group is a factor
+    pcode = factor(pcode)   # Ensure participant ID is a factor
+)
+
+# ANOVA for Heartbeat
+## FIRST check normality
+df_long %>% group_by(group, condition) %>%
+  shapiro_test(Mean) ## normality assumption met (p > 0.05)
+## THEN check for homogenity of variance
+car::leveneTest(Mean ~ group * condition, data = df_long) ## homogenity assumption met (p > 0.05)
+## NOW run ANOVA for mean
+model_Mean <- aov(Mean ~ group * condition + Error(pcode / condition), data = df_long)
+summary(model_Mean)
+
+# ANOVA for RMSSD
+## FIRST check normality
+df_long %>% group_by(group, condition) %>%
+  shapiro_test(RMSSD) ## normality assumption NOT met for FND sound and both HC condition (p < 0.05)
+## THEN check for homogenity of variance
+car::leveneTest(RMSSD ~ group * condition, data = df_long) ## homogenity assumption NOT met (p = 0.0123)
+## NOW run ANOVA for RMSSD
+model_RMSSD <- aov(RMSSD ~ group * condition + Error(pcode / condition), data = df_long)
+summary(model_RMSSD) ## group effect p = 0.0007
+
+##### RUNNING a non-normality/homogenity robust analysis of ANOVA (ARTool) for RMSSD
+library(ARTool)
+# Fitting the ART model
+art_model_rmssd <- art(RMSSD ~ group * condition + (1 | pcode), data = df_long)
+
+# Run ANOVA on the aligned ranks
+anova(art_model_rmssd) ### group effect p = 0.0014 
+
+mean(df_ECG$Mean_HEART[df_ECG$group=="FND"]) # 836.9772ms 
+mean(df_ECG$Mean_SOUND[df_ECG$group=="FND"]) # 832.7884ms --> faster heartbeat for SOUND
+
+```
+
+## 7.1 Summary Table
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+### Summary Table for debriefing questionnaire ---------------------------------------------
+df_tbl <- df %>%
+  mutate(group = factor(group, levels = c("0", "1"), labels = c("HC", "FND")))
+
+Data.t <- select(df_tbl, c("group","mean_RR_interval_hep", "sd_RR_interval_hep", "rmssd_hep"))
+library(gtsummary)
+library(gtsummary)
+library(dplyr)
+
+# Create the table summary
+tbl1 <- Data.t %>%
+  tbl_summary(
+    by = group, # Grouping by 'group'
+    missing = "no",
+    statistic = list(
+      mean_RR_interval_hep = "{mean} ({sd})", 
+      sd_RR_interval_hep = "{median} ({IQR})", 
+      rmssd_hep ="{median} ({IQR})"
+    ),
+    
+    digits = list(mean_RR_interval_hep = 1, sd_RR_interval_hep = 1, rmssd_hep = 1),
+    label = list(
+      mean_RR_interval_hep = "Mean RR interval in ms, mean (SD)",
+      sd_RR_interval_hep = "SD of RR interval in ms, median(IQR)",
+      rmssd_hep = "Heartrate Variability (RMSSD) in ms, median(IQR)"
+      )
+  ) %>%
+  modify_header(list(label ~ "**Variable**")) %>%
+  modify_caption("**ECG across group**") %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Group**") %>%
+  add_p(
+    test = list(
+      mean_RR_interval_hep = "t.test", 
+      sd_RR_interval_hep = "wilcox.test", 
+      rmssd_hep = "wilcox.test"
+    )
+  ) %>% 
+  add_overall(last = FALSE)
+
+# Print the table
+tbl1
+	
+  tbl1_df <- tbl1 %>% as_tibble()
+	write_xlsx(tbl1_df, "7.1_Table_ECG.xlsx")
+	
+	
+
+```
+
+## 7.2 Correlations with EEG
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+
+# control ECG differences are assocaited with EEG markers
+
+cor.test(df$mean_RR_interval_hep, df$GMD_HEART_310) # interaction explorative, global analysis
+cor.test(df$mean_RR_interval_hep, df$GMD_HEART_510) # main effect group explorative, global analysis
+cor.test(df$mean_RR_interval_hep, df$GFP_HEART_285) # interaction explorative, global analysis
+cor.test(df$mean_RR_interval_hep, df$F1_HEART_185) # group explorative, trace analysis
+cor.test(df$mean_RR_interval_hep, df$F8_SOUND_515) # group targeted, trace analysis
+cor.test(df$mean_RR_interval_hep, df$F8_SOUND_451) # group targeted, trace analysis
+cor.test(df$mean_RR_interval_hep, df$F8_HEART_536) # group targeted, trace analysis
+cor.test(df$mean_RR_interval_hep, df$F8_HEART_570) # group targeted, trace analysis
+
+cor.test(df$rmssd_hep, df$GMD_HEART_310) 
+cor.test(df$rmssd_hep, df$GMD_HEART_510)
+cor.test(df$rmssd_hep, df$GFP_HEART_285)
+cor.test(df$rmssd_hep, df$F1_HEART_185)
+cor.test(df$rmssd_hep, df$F8_SOUND_515)
+cor.test(df$rmssd_hep, df$F8_SOUND_451)
+cor.test(df$rmssd_hep, df$F8_HEART_536)
+cor.test(df$rmssd_hep, df$F8_HEART_570)
+
+# and also difficulty rating (that was different between groups)
+cor.test(df$hep_difficulty_heart, df$GMD_HEART_310) # p=0.08
+cor.test(df$hep_difficulty_heart, df$GMD_HEART_510)
+cor.test(df$hep_difficulty_heart, df$GFP_HEART_285)
+cor.test(df$hep_difficulty_heart, df$F1_HEART_185)
+cor.test(df$hep_difficulty_heart, df$F8_SOUND_515)
+cor.test(df$hep_difficulty_heart, df$F8_SOUND_451)
+cor.test(df$hep_difficulty_heart, df$F8_HEART_536)
+cor.test(df$hep_difficulty_heart, df$F8_HEART_570)
+```
+
+## 7.3 Visualization, specific for condition
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+# Reshape data to long format
+df_long <- df_ECG %>%
+  select(pcode, group, Mean_HEART, RMSSD_HEART, Mean_SOUND, RMSSD_SOUND) %>%
+  pivot_longer(cols = -c(pcode, group), names_to = "Metric", values_to = "Value")
+
+# Filter for Mean and RMSSD separately
+df_mean <- df_long %>% filter(grepl("^Mean_", Metric))
+df_rmssd <- df_long %>% filter(grepl("^RMSSD_", Metric))
+
+# Mean Heart Rate Plot
+p1 <- ggplot(df_mean, aes(x = Metric, y = Value, fill = group)) +
+  geom_bar(stat = "summary", fun = "mean", position = position_dodge(0.8), alpha = 0.8, , width = 0.8) +
+  geom_errorbar(stat = "summary", fun.data = mean_se, position = position_dodge(0.8), width = 0.2) +
+  labs(title = "Heart Rate", y = "R-R interval in ms", x = "") +
+  scale_fill_manual(values = c("FND" = "#E95248", "HC" = "#868686FF")) +
+  coord_cartesian(ylim = c(600, NA)) +  # Zooms in without removing bars
+   theme_minimal() +
+  theme(legend.position = "none") +
+  theme(panel.grid = element_blank())  # Remove grid lines
+
+# RMSSD Plot
+p2 <- ggplot(df_rmssd, aes(x = Metric, y = Value, fill = group)) +
+  geom_bar(stat = "summary", fun = "mean", position = position_dodge(0.8), alpha = 0.8, , width = 0.8) + geom_errorbar(stat = "summary", fun.data = mean_se, position = position_dodge(0.8), width = 0.2) +
+  labs(title = "Heart Rate Variability", y = "RMSSD in ms", x = "") +
+  scale_fill_manual(values = c("FND" = "#E95248", "HC" = "#868686FF")) +
+  theme_minimal() +
+  theme(panel.grid = element_blank())  # Remove grid lines
+
+
+# Print plots
+grid.arrange(p1, p2, ncol = 2)
+
+	pdf("7.3_Plot_ECG.pdf")
+	grid.arrange(p1, p2, ncol = 2)
+	dev.off()
+	
+```
+
+## 7.4 Statistics, specific for condition
+
+```{r}
+#| warning: FALSE
+#| error: FALSE
+#### statistics
+		# Paired comparisons: Reshape to wide format
+df_wide <- df_ECG %>%
+  select(pcode, group, Mean_HEART, Mean_SOUND, RMSSD_HEART, RMSSD_SOUND)
+
+# ----- BETWEEN-GROUP t-tests (independent) -----
+t_mean_heart <- t.test(Mean_HEART ~ group, data = df_wide)
+t_mean_sound <- t.test(Mean_SOUND ~ group, data = df_wide)
+w_rmssd_heart <- wilcox.test(RMSSD_HEART ~ group, data = df_wide)
+w_rmssd_sound <- wilcox.test(RMSSD_SOUND ~ group, data = df_wide)
+
+# ----- WITHIN-GROUP t-tests (paired) -----
+# Mean comparison within FND
+t_paired_mean_fnd <- t.test(
+  df_wide$Mean_HEART[df_wide$group == "FND"],
+  df_wide$Mean_SOUND[df_wide$group == "FND"],
+  paired = TRUE)
+
+# Mean comparison within HC
+t_paired_mean_hc <- t.test(
+  df_wide$Mean_HEART[df_wide$group == "HC"],
+  df_wide$Mean_SOUND[df_wide$group == "HC"],
+  paired = TRUE)
+
+# RMSSD comparison within FND
+w_paired_rmssd_fnd <- wilcox.test(
+  df_wide$RMSSD_HEART[df_wide$group == "FND"],
+  df_wide$RMSSD_SOUND[df_wide$group == "FND"],
+  paired = TRUE)
+
+# RMSSD comparison within HC
+w_paired_rmssd_hc <- wilcox.test(
+  df_wide$RMSSD_HEART[df_wide$group == "HC"],
+  df_wide$RMSSD_SOUND[df_wide$group == "HC"],
+  paired = TRUE)
+
+# ----- Collect raw p-values -----
+raw_pvals <- c(
+  t_mean_heart$p.value,
+  t_mean_sound$p.value,
+  w_rmssd_heart$p.value,
+  w_rmssd_sound$p.value,
+  t_paired_mean_fnd$p.value,
+  t_paired_mean_hc$p.value,
+  w_paired_rmssd_fnd$p.value,
+  w_paired_rmssd_hc$p.value)
+
+# ----- Apply FDR correction -----
+pvals_fdr <- p.adjust(raw_pvals, method = "fdr")
+
+# ----- Print FDR-corrected results -----
+labels <- c(
+  "Mean_HEART (between-group)",
+  "Mean_SOUND (between-group)",
+  "RMSSD_HEART (between-group)",
+  "RMSSD_SOUND (between-group)",
+  "Mean (FND within-group)",
+  "Mean (HC within-group)",
+  "RMSSD (FND within-group)",
+  "RMSSD (HC within-group)")
+
+cat("## FDR-CORRECTED P-VALUES\n")
+for (i in seq_along(labels)) {
+  cat(labels[i], ": p (FDR) =", pvals_fdr[i], "\n")}
+
+### specific values
+mean(df_wide$Mean_HEART[df_wide$group == "FND"]) # 840ms = mean r-r interval for FND in focus on the heart
+mean(df_wide$Mean_SOUND[df_wide$group == "FND"]) # 835ms = mean r-r interval for FND in focus on the sound
+mean(df_wide$Mean_HEART[df_wide$group == "HC"]) # 921ms = mean r-r interval for FND in focus on the heart
+mean(df_wide$Mean_SOUND[df_wide$group == "HC"])# 920ms = mean r-r interval for FND in focus on the heart
+
+### specific values
+mean(df_wide$RMSSD_HEART[df_wide$group == "FND"]) #  = mean HRV for FND in focus on the heart
+mean(df_wide$RMSSD_SOUND[df_wide$group == "FND"]) #  = mean HRV for FND in focus on the sound
+mean(df_wide$RMSSD_HEART[df_wide$group == "HC"]) #  = mean HRV for FND in focus on the heart
+mean(df_wide$RMSSD_SOUND[df_wide$group == "HC"])#  = mean HRV for FND in focus on the heart
+```

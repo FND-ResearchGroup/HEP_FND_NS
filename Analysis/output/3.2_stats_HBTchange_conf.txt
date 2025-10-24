@@ -1,0 +1,17 @@
+### Wilcoxon Test: FND Group ###
+
+	Wilcoxon signed rank test with continuity correction
+
+data:  df$hbt_confidence_neutral[df$group == "1"] and df$hbt_confidence_arousal[df$group == "1"]
+V = 303.5, p-value = 0.857
+alternative hypothesis: true location shift is not equal to 0
+
+
+### Wilcoxon Test: HC Group ###
+
+	Wilcoxon signed rank test with continuity correction
+
+data:  df$hbt_confidence_neutral[df$group == "0"] and df$hbt_confidence_arousal[df$group == "0"]
+V = 388, p-value = 0.2139
+alternative hypothesis: true location shift is not equal to 0
+

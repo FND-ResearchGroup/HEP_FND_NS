@@ -1,0 +1,6 @@
+Description:
+List of the questions used during the HCT task:
+'self-evaluation_questions_HCT_task.pdf': PDF document with the questions ask after each trials in HCT task in french, german and english. Responses were given on a continous scale between 0-100. Results are in the participants.tsv file.
+	
+	
+	
