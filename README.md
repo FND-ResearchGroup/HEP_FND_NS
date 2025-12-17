@@ -1,10 +1,9 @@
 # HEP in FND
 
  date: 		23 October 2025
- author: 	Natascha Stoffel, natascha.stoffel@unifr.ch
-			Michael Mouthon, michael.mouthon@unifr.ch
+ author: 	Natascha Stoffel, natascha.stoffel@unifr.ch and Michael Mouthon, michael.mouthon@unifr.ch
  
-This git hub repository entails the data, scripts and output for the project "Attenuated Heartbeat-evoked Potentials in Functional Neurological Disorder" - Stoffel et al., under review at Brain Communications
+This git hub repository entails the data, scripts and output for the project "Attenuated Heartbeat-evoked Potentials in Functional Neurological Disorder" - Stoffel et al., accepted for publication at Brain Communications
 
 This repository will be structured as follows (please note that the data and code will be made available once the manuscript is published)
 
